@@ -172,7 +172,9 @@ presentation.pptx
 
 ## 🌐 Website URL Scraping
 
-Users can also add websites as knowledge sources.
+Users can add a website URL as a knowledge source. The application is
+designed to handle both normal websites and websites where direct
+HTTP/browser access may be restricted.
 
 Example:
 
@@ -180,14 +182,24 @@ Example:
 https://example.com
 ```
 
-The backend:
+### Robust Scraping Strategy
+
+The backend uses a multi-level fallback strategy:
 
 ``` text
 Website URL
      ↓
-Web Scraping
+Requests / BeautifulSoup
      ↓
-Content Extraction
+If direct HTTP access fails
+     ↓
+Playwright Browser Scraping
+     ↓
+If browser access fails
+     ↓
+Jina Reader
+     ↓
+Readable Web Content
      ↓
 Text Processing
      ↓
@@ -198,8 +210,124 @@ Embeddings
 Qdrant
 ```
 
+### 1. Requests / BeautifulSoup
+
+The scraper first attempts to retrieve and extract readable content
+directly using HTTP requests and HTML parsing.
+
+This is the fastest approach and works well for standard publicly
+accessible HTML pages.
+
+### 2. Playwright
+
+If direct HTTP scraping fails, the application falls back to Playwright
+to load the website using a real browser engine.
+
+This helps with websites where the content is rendered dynamically using
+JavaScript.
+
+### 3. Jina Reader
+
+If both direct HTTP access and browser-based scraping fail, the
+application uses Jina Reader as a final fallback.
+
+Jina Reader converts supported webpages into a clean, readable Markdown
+representation that can then be processed by the RAG pipeline.
+
+This fallback is particularly useful when a website cannot be accessed
+directly from the local environment because of network restrictions or
+other access limitations.
+
+### Same-Domain Crawling
+
+The scraper can also discover and process relevant pages from the same
+website.
+
+For example:
+
+``` text
+https://example.com/
+        ↓
+https://example.com/about
+        ↓
+https://example.com/services
+```
+
+A configurable page limit is applied to prevent large websites from
+being crawled indefinitely and to keep processing time reasonable.
+
+### URL Processing Pipeline
+
+After the webpage content is successfully retrieved:
+
+``` text
+Website
+   ↓
+Content Extraction
+   ↓
+Text Cleaning
+   ↓
+Same-Domain Page Crawling
+   ↓
+Chunking
+   ↓
+Embeddings
+   ↓
+Qdrant
+```
+
 The URL remains visible in the input field until it is successfully
 processed or edited by the user.
+
+### Duplicate URL Prevention
+
+The application checks whether the URL has already been added to the
+current session **before starting the scraping process**.
+
+This prevents the same website from being scraped and embedded multiple
+times unnecessarily.
+
+------------------------------------------------------------------------
+
+## 🔐 Session Isolation
+
+Each browser tab receives its own session ID.
+
+The session ID is sent with source and question requests and is attached
+to every vector stored in Qdrant.
+
+``` text
+Browser Tab A
+     ↓
+Session A
+     ↓
+Sources A
+     ↓
+Qdrant vectors with session_id = A
+
+
+Browser Tab B
+     ↓
+Session B
+     ↓
+Sources B
+     ↓
+Qdrant vectors with session_id = B
+```
+
+A session can retrieve only its own vectors. This prevents one browser
+session from receiving information belonging to another session.
+
+The backend also protects against stale persistent vectors:
+
+- Existing vectors for a session are removed before that session's
+  current sources are reprocessed.
+- A session with no active sources does not perform a Qdrant search.
+- A Qdrant search without a valid session ID is blocked.
+- Uploaded files and URLs are maintained separately for each session.
+
+This is important because Qdrant is persistent while the application's
+temporary source lists are held in backend memory.
 
 ------------------------------------------------------------------------
 
@@ -214,8 +342,11 @@ create another source.
 
 ### Duplicate URLs
 
-If the same URL is added again, the application prevents it from being
-added twice.
+If the same URL is added again within the same session, the application
+prevents it from being added twice.
+
+The duplicate check happens **before scraping**, avoiding unnecessary
+web-crawling time.
 
 This avoids unnecessary processing and duplicate embeddings.
 
@@ -417,7 +548,7 @@ The screenshot should ideally show the overall interface, including the source s
 
 ### 📄 2. Document Upload and 🌐 URL Scraping
 
-Show the application with one or more documents ane URLs added.
+Show the application with one or more documents and URLs added.
 
 ```text
 screenshots/file-upload.png
@@ -431,7 +562,7 @@ This demonstrates that the application can use uploaded documents and url scrape
 
 ---
 
-### 🎤 4. Voice Interaction
+### 🎤 3. Voice Interaction
 
 Show the microphone/recording state while the user is asking a question.
 
@@ -447,7 +578,7 @@ This screenshot is especially important because the project is designed around *
 
 ---
 
-### 💬 5. Final Conversational Output
+### 💬 4. Final Conversational Output
 
 Show a completed interaction where the user's spoken question has been converted to text and the assistant has generated an answer.
 
@@ -718,7 +849,8 @@ voice-rag-project/
 
 -   Requests
 -   BeautifulSoup
--   lxml
+-   Playwright
+-   Jina Reader
 
 ### Speech
 
@@ -845,6 +977,30 @@ Install dependencies:
 ``` bash
 npm install
 ```
+
+------------------------------------------------------------------------
+
+# 🚀 Deployment
+
+The application can be deployed with a separate frontend and backend.
+
+The backend runs as a FastAPI service and the frontend can be deployed
+as a React/Vite application.
+
+For deployment, configure environment variables on the hosting platform
+instead of committing the local `.env` file.
+
+Typical backend variables include:
+
+``` env
+QDRANT_URL=your_qdrant_url
+QDRANT_API_KEY=your_qdrant_api_key
+GEMINI_API_KEY=your_gemini_api_key
+GROQ_API_KEY=your_groq_api_key
+FRONTEND_URL=your_frontend_url
+```
+
+The frontend should point its API requests to the deployed backend URL.
 
 ------------------------------------------------------------------------
 
@@ -996,6 +1152,27 @@ Voice recognition can also be affected by:
 -   Pronunciation
 -   Internet connection
 -   Speech-to-text service performance
+
+------------------------------------------------------------------------
+
+# ✅ Latest Implementation Notes
+
+The current implementation includes the following assessment-focused
+behaviors:
+
+- Voice is the only question-entry method in the frontend.
+- Uploaded files and website URLs are processed as RAG knowledge sources.
+- Website scraping uses multiple fallback mechanisms for improved
+  robustness.
+- URL crawling is limited to avoid excessive processing time.
+- Duplicate URLs are rejected within the same session before scraping.
+- Session IDs isolate source ingestion and Qdrant retrieval.
+- Previous vectors for a session are cleared before reprocessing its
+  current sources.
+- Empty sessions do not search the persistent Qdrant collection.
+- Missing session IDs cannot trigger a global Qdrant search.
+- Retrieved sources are returned with the generated answer.
+- Generated answers can be converted to speech using TTS.
 
 ------------------------------------------------------------------------
 
