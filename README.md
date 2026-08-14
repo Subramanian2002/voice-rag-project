@@ -422,7 +422,7 @@ screenshots/file-upload.png
 ```
 
 <p align="center">
-  <img src="screenshots/file-upload.png" alt="Document Upload" width="850">
+  <img src="screenshots/file-url-upload.png" alt="Document Upload" width="850">
 </p>
 
 This demonstrates that the application can use uploaded documents and url scraped text as RAG knowledge sources.
