@@ -765,11 +765,15 @@ body {
 .message-text {
   font-size: 14px;
 
-  line-height: 1.7;
+  line-height: 1.65;
 
   color: #334155;
 
   white-space: pre-wrap;
+
+  text-align: left;
+
+  word-break: break-word;
 }
 
 
@@ -812,6 +816,8 @@ body {
 
 .user-message .message-text {
   color: #ffffff;
+
+  text-align: left;
 }
 
 
@@ -825,6 +831,16 @@ body {
 
 .assistant-message .message-content {
   padding-top: 1px;
+
+  max-width: 82%;
+}
+
+.assistant-message .message-text {
+  text-align: left;
+
+  line-height: 1.65;
+
+  color: #334155;
 }
 
 
@@ -1047,6 +1063,10 @@ body {
   .message-content {
     max-width: 85%;
   }
+
+  .assistant-message .message-content {
+    max-width: 88%;
+  }
 }
 
 
@@ -1098,5 +1118,19 @@ body {
 
   .welcome h2 {
     font-size: 20px;
+  }
+
+  .message-content {
+    max-width: 90%;
+  }
+
+  .assistant-message .message-content {
+    max-width: 92%;
+  }
+
+  .message-text {
+    font-size: 13px;
+
+    line-height: 1.6;
   }
 }

@@ -6,7 +6,7 @@ function App() {
   // BACKEND
   // =========================================================
 
-  const BACKEND_URL = "http://127.0.0.1:8000";
+  const BACKEND_URL = "https://voice-rag-backend-pm0s.onrender.com";
 
 
   // =========================================================
