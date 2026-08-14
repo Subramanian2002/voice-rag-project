@@ -155,6 +155,7 @@ Users can upload multiple knowledge-source files through the sidebar.
 Supported formats currently include:
 
 -   PDF
+-   TXT
 -   PowerPoint (`.pptx`)
 -   Other text-based content supported by the backend
 
@@ -162,6 +163,7 @@ Example:
 
 ``` text
 resume.pdf
+text.txt
 project_document.pdf
 presentation.pptx
 ```
