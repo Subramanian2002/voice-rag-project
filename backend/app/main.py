@@ -1,6 +1,7 @@
 import os
 import tempfile
 import uuid
+import hashlib
 
 from dotenv import load_dotenv
 
@@ -287,6 +288,73 @@ async def upload_files(
                     )
                 )
 
+            # Create a content hash so the same file cannot be
+            # uploaded repeatedly into the same browser session.
+            file_hash = hashlib.sha256(
+                file_content
+            ).hexdigest()
+
+            duplicate_source = None
+
+            for existing_source in uploaded_sources[
+                session_id
+            ]:
+
+                existing_hash = existing_source.get(
+                    "file_hash"
+                )
+
+                # Newer entries contain file_hash.
+                if existing_hash == file_hash:
+
+                    duplicate_source = existing_source
+                    break
+
+                # Older entries may not contain file_hash.
+                # Compare their stored file contents when possible.
+                existing_path = existing_source.get(
+                    "file_path"
+                )
+
+                if (
+                    not existing_hash
+                    and existing_path
+                    and os.path.exists(existing_path)
+                ):
+
+                    try:
+
+                        with open(
+                            existing_path,
+                            "rb"
+                        ) as existing_file:
+
+                            existing_hash = hashlib.sha256(
+                                existing_file.read()
+                            ).hexdigest()
+
+                        if existing_hash == file_hash:
+
+                            duplicate_source = existing_source
+                            break
+
+                    except Exception:
+
+                        pass
+
+            if duplicate_source:
+
+                uploaded_files.append(
+                    original_filename
+                )
+
+                print(
+                    f"Duplicate file skipped: "
+                    f"{original_filename}"
+                )
+
+                continue
+
             with open(
                 file_path,
                 "wb"
@@ -328,6 +396,9 @@ async def upload_files(
                 "source_type":
                     file_extension.lstrip("."),
 
+                "file_hash":
+                    file_hash,
+
                 "session_id":
                     session_id
             }
@@ -337,12 +408,22 @@ async def upload_files(
             original_filename
         )
 
+    if uploaded_files:
+
+        return {
+            "message":
+                "Files uploaded successfully",
+
+            "files":
+                uploaded_files
+        }
+
     return {
         "message":
-            "Files uploaded successfully",
+            "No new files were added.",
 
         "files":
-            uploaded_files
+            []
     }
 
 
@@ -539,6 +620,77 @@ def process_sources(
             )
         )
 
+        # Defensive deduplication for sources that may have been added
+        # by an older backend version before duplicate prevention existed.
+        unique_uploaded_sources = []
+        seen_file_keys = set()
+
+        for source in session_uploaded_sources:
+
+            file_key = source.get(
+                "file_hash"
+            )
+
+            if not file_key:
+
+                file_path = source.get(
+                    "file_path"
+                )
+
+                if (
+                    file_path
+                    and os.path.exists(file_path)
+                ):
+
+                    try:
+
+                        with open(
+                            file_path,
+                            "rb"
+                        ) as existing_file:
+
+                            file_key = hashlib.sha256(
+                                existing_file.read()
+                            ).hexdigest()
+
+                    except Exception:
+
+                        file_key = None
+
+            if not file_key:
+
+                file_key = (
+                    source.get(
+                        "source_name",
+                        ""
+                    ),
+                    source.get(
+                        "file_path",
+                        ""
+                    )
+                )
+
+            if file_key in seen_file_keys:
+
+                print(
+                    "Skipping duplicate source during "
+                    f"processing: {source.get('source_name', '')}"
+                )
+
+                continue
+
+            seen_file_keys.add(
+                file_key
+            )
+
+            unique_uploaded_sources.append(
+                source
+            )
+
+        session_uploaded_sources = (
+            unique_uploaded_sources
+        )
+
         print(
             "================================"
         )
@@ -549,7 +701,7 @@ def process_sources(
         )
 
         print(
-            "Files:",
+            "Unique files:",
             len(
                 session_uploaded_sources
             )
