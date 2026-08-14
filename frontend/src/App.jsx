@@ -2,16 +2,29 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
 function App() {
-  // =========================================================
   // BACKEND
-  // =========================================================
 
   const BACKEND_URL = "https://voice-rag-backend-pm0s.onrender.com";
+  // "http://127.0.0.1:8000";
+  
+
+                                            
+  
+
+  // SESSION ID
+  // Each browser tab gets its own session.
+  const SESSION_ID =
+    sessionStorage.getItem(
+      "voice_rag_session_id"
+    ) || crypto.randomUUID();
+
+  sessionStorage.setItem(
+    "voice_rag_session_id",
+    SESSION_ID
+  );
 
 
-  // =========================================================
   // SOURCE STATE
-  // =========================================================
 
   // Selected files
   const [files, setFiles] = useState([]);
@@ -23,30 +36,28 @@ function App() {
   const [urls, setUrls] = useState([]);
 
   // Source status
-  const [sourceMessage, setSourceMessage] = useState("");
+  const [sourceMessage, setSourceMessage] =
+    useState("");
 
 
-  // =========================================================
   // VOICE STATE
-  // =========================================================
 
-  const [isRecording, setIsRecording] = useState(false);
+  const [isRecording, setIsRecording] =
+    useState(false);
 
-  const [voiceStatus, setVoiceStatus] = useState(
-    "Click the microphone and ask your question."
-  );
+  const [voiceStatus, setVoiceStatus] =
+    useState(
+      "Click the microphone and ask your question."
+    );
 
 
-  // =========================================================
   // CONVERSATION
-  // =========================================================
 
-  const [conversation, setConversation] = useState([]);
+  const [conversation, setConversation] =
+    useState([]);
 
 
-  // =========================================================
   // REFERENCES
-  // =========================================================
 
   const fileInputRef = useRef(null);
 
@@ -75,9 +86,7 @@ function App() {
   const chatEndRef = useRef(null);
 
 
-  // =========================================================
   // AUTO SCROLL CHAT
-  // =========================================================
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({
@@ -86,9 +95,7 @@ function App() {
   }, [conversation]);
 
 
-  // =========================================================
   // STOP TTS
-  // =========================================================
 
   const stopSpeaking = () => {
     if (ttsAudioRef.current) {
@@ -99,9 +106,7 @@ function App() {
   };
 
 
-  // =========================================================
   // FILE SELECTION
-  // =========================================================
 
   const handleFileSelection = (event) => {
     const selectedFiles = Array.from(
@@ -113,7 +118,6 @@ function App() {
     }
 
     setFiles((previousFiles) => {
-      // Existing filenames
       const existingNames = new Set(
         previousFiles.map(
           (file) => file.name
@@ -124,77 +128,48 @@ function App() {
 
       const duplicateFiles = [];
 
-
-      // -------------------------------------------------------
-      // Check every selected file
-      // -------------------------------------------------------
-
       selectedFiles.forEach((file) => {
         if (existingNames.has(file.name)) {
-
           duplicateFiles.push(
             file.name
           );
-
         } else {
-
           newFiles.push(file);
 
-          // Add immediately to the Set so that
-          // duplicate files within the SAME
-          // selection are also detected.
           existingNames.add(
             file.name
           );
         }
       });
 
-
-      // -------------------------------------------------------
-      // Display status message
-      // -------------------------------------------------------
-
       if (
         duplicateFiles.length > 0 &&
         newFiles.length === 0
       ) {
-
         if (
           duplicateFiles.length === 1
         ) {
-
           setSourceMessage(
             `"${duplicateFiles[0]}" is already present.`
           );
-
         } else {
-
           setSourceMessage(
             `${duplicateFiles.length} file(s) are already present.`
           );
         }
-
       } else if (
         duplicateFiles.length > 0 &&
         newFiles.length > 0
       ) {
-
         setSourceMessage(
           `${newFiles.length} new file(s) added. ` +
           `${duplicateFiles.length} file(s) already present.`
         );
-
       } else {
-
         setSourceMessage(
           `${newFiles.length} file(s) selected.`
         );
       }
-
-
-      // -------------------------------------------------------
-      // Keep old files + add only new files
-      // -------------------------------------------------------
 
       return [
         ...previousFiles,
@@ -202,23 +177,13 @@ function App() {
       ];
     });
 
-
-    // ---------------------------------------------------------
-    // Reset input
-    //
-    // This is important because it allows the user to select
-    // the same file again and receive the duplicate message.
-    // ---------------------------------------------------------
-
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
 
-  // =========================================================
   // REMOVE FILE
-  // =========================================================
 
   const removeFile = (fileName) => {
     setFiles((previousFiles) =>
@@ -233,9 +198,7 @@ function App() {
   };
 
 
-  // =========================================================
   // UPLOAD FILES
-  // =========================================================
 
   const uploadFiles = async () => {
     if (files.length === 0) {
@@ -255,7 +218,6 @@ function App() {
     });
 
     try {
-
       setSourceMessage(
         `Uploading ${files.length} file(s)...`
       );
@@ -265,6 +227,12 @@ function App() {
           `${BACKEND_URL}/upload`,
           {
             method: "POST",
+
+            headers: {
+              "X-Session-ID":
+                SESSION_ID,
+            },
+
             body: formData,
           }
         );
@@ -273,7 +241,6 @@ function App() {
         await response.json();
 
       if (!response.ok) {
-
         setSourceMessage(
           data.detail ||
             data.error ||
@@ -288,7 +255,6 @@ function App() {
       );
 
     } catch (error) {
-
       console.error(
         "Upload error:",
         error
@@ -301,9 +267,7 @@ function App() {
   };
 
 
-  // =========================================================
   // URL FIELD CHANGE
-  // =========================================================
 
   const handleUrlChange = (event) => {
     const newUrl =
@@ -318,9 +282,7 @@ function App() {
   };
 
 
-  // =========================================================
   // URL PASTE
-  // =========================================================
 
   const handleUrlPaste = (event) => {
     event.preventDefault();
@@ -338,9 +300,7 @@ function App() {
     setUrl(pastedText);
 
     setTimeout(() => {
-
       if (urlInputRef.current) {
-
         urlInputRef.current.focus();
 
         const length =
@@ -351,14 +311,11 @@ function App() {
           length
         );
       }
-
     }, 0);
   };
 
 
-  // =========================================================
   // ADD ONE URL
-  // =========================================================
 
   const addUrl = async () => {
     const trimmedUrl =
@@ -369,13 +326,7 @@ function App() {
       trimmedUrl
     );
 
-
-    // -------------------------------------------------------
-    // Validate
-    // -------------------------------------------------------
-
     if (!trimmedUrl) {
-
       setSourceMessage(
         "Please paste a URL first."
       );
@@ -383,15 +334,9 @@ function App() {
       return;
     }
 
-
-    // -------------------------------------------------------
-    // Duplicate URL
-    // -------------------------------------------------------
-
     if (
       urls.includes(trimmedUrl)
     ) {
-
       setSourceMessage(
         "This URL has already been added."
       );
@@ -399,17 +344,10 @@ function App() {
       return;
     }
 
-
     try {
-
       setSourceMessage(
         "Scraping URL..."
       );
-
-
-      // -----------------------------------------------------
-      // Backend request
-      // -----------------------------------------------------
 
       const response =
         await fetch(
@@ -420,6 +358,9 @@ function App() {
             headers: {
               "Content-Type":
                 "application/json",
+
+              "X-Session-ID":
+                SESSION_ID,
             },
 
             body: JSON.stringify({
@@ -428,37 +369,23 @@ function App() {
           }
         );
 
-
       const data =
         await response.json();
-
 
       console.log(
         "Add URL response:",
         data
       );
 
-
-      // -----------------------------------------------------
-      // Backend error
-      // -----------------------------------------------------
-
       if (!response.ok) {
-
         setSourceMessage(
           data.detail ||
             data.error ||
             "URL scraping failed."
         );
 
-        // Keep URL in field
         return;
       }
-
-
-      // -----------------------------------------------------
-      // Successfully added
-      // -----------------------------------------------------
 
       setUrls(
         (previousUrls) => [
@@ -467,30 +394,22 @@ function App() {
         ]
       );
 
-
-      // Clear only after success
       setUrl("");
-
 
       setSourceMessage(
         "URL scraped successfully."
       );
 
-
-      // Return focus to URL field
       setTimeout(() => {
         urlInputRef.current?.focus();
       }, 0);
 
     } catch (error) {
-
       console.error(
         "Add URL error:",
         error
       );
 
-
-      // Keep URL if backend fails
       setSourceMessage(
         "Could not connect to backend."
       );
@@ -498,14 +417,11 @@ function App() {
   };
 
 
-  // =========================================================
   // REMOVE URL
-  // =========================================================
 
   const removeUrl = (
     urlToRemove
   ) => {
-
     setUrls(
       (previousUrls) =>
         previousUrls.filter(
@@ -520,41 +436,37 @@ function App() {
   };
 
 
-  // =========================================================
   // PROCESS SOURCES
-  // =========================================================
 
   const processSources =
     async () => {
-
       try {
-
         setSourceMessage(
           "Processing sources..."
         );
-
 
         const response =
           await fetch(
             `${BACKEND_URL}/process`,
             {
               method: "POST",
+
+              headers: {
+                "X-Session-ID":
+                  SESSION_ID,
+              },
             }
           );
 
-
         const data =
           await response.json();
-
 
         console.log(
           "Process response:",
           data
         );
 
-
         if (!response.ok) {
-
           setSourceMessage(
             data.detail ||
               data.error ||
@@ -564,15 +476,13 @@ function App() {
           return;
         }
 
-
         setSourceMessage(
           `Processed ${data.files_processed} file(s), ` +
-            `${data.urls_processed} URL(s), ` +
-            `${data.chunks_stored} chunks.`
+          `${data.urls_processed} URL(s), ` +
+          `${data.chunks_stored} chunks.`
         );
 
       } catch (error) {
-
         console.error(
           "Process error:",
           error
@@ -585,13 +495,10 @@ function App() {
     };
 
 
-  // =========================================================
   // TEXT TO SPEECH
-  // =========================================================
 
   const speakAnswer =
     async (text) => {
-
       if (
         !text ||
         !text.trim()
@@ -599,16 +506,12 @@ function App() {
         return;
       }
 
-
       try {
-
         stopSpeaking();
-
 
         setVoiceStatus(
           "Generating voice answer..."
         );
-
 
         const response =
           await fetch(
@@ -627,9 +530,7 @@ function App() {
             }
           );
 
-
         if (!response.ok) {
-
           console.error(
             "TTS error:",
             await response.text()
@@ -642,35 +543,27 @@ function App() {
           return;
         }
 
-
         const audioBlob =
           await response.blob();
-
 
         const audioUrl =
           URL.createObjectURL(
             audioBlob
           );
 
-
         const audio =
           new Audio(audioUrl);
-
 
         ttsAudioRef.current =
           audio;
 
-
         audio.onplay = () => {
-
           setVoiceStatus(
             "🔊 Speaking..."
           );
         };
 
-
         audio.onended = () => {
-
           setVoiceStatus(
             "Click the microphone and ask your next question."
           );
@@ -683,9 +576,7 @@ function App() {
           );
         };
 
-
         audio.onerror = () => {
-
           setVoiceStatus(
             "Answer generated, but audio playback failed."
           );
@@ -698,11 +589,9 @@ function App() {
           );
         };
 
-
         await audio.play();
 
       } catch (error) {
-
         console.error(
           "TTS error:",
           error
@@ -715,18 +604,14 @@ function App() {
     };
 
 
-  // =========================================================
   // ASK RAG QUESTION
-  // =========================================================
 
   const askQuestion =
     async (question) => {
-
       if (
         !question ||
         !question.trim()
       ) {
-
         setVoiceStatus(
           "I could not understand the question. Please try again."
         );
@@ -734,18 +619,13 @@ function App() {
         return;
       }
 
-
-      // Stop current TTS
       stopSpeaking();
-
 
       setVoiceStatus(
         "Thinking..."
       );
 
-
       try {
-
         const conversationHistory =
           conversation.map(
             (message) => ({
@@ -757,18 +637,15 @@ function App() {
             })
           );
 
-
         console.log(
           "Question:",
           question
         );
 
-
         console.log(
           "Conversation history:",
           conversationHistory
         );
-
 
         const response =
           await fetch(
@@ -779,6 +656,9 @@ function App() {
               headers: {
                 "Content-Type":
                   "application/json",
+
+                "X-Session-ID":
+                  SESSION_ID,
               },
 
               body: JSON.stringify({
@@ -790,19 +670,15 @@ function App() {
             }
           );
 
-
         const data =
           await response.json();
-
 
         console.log(
           "RAG response:",
           data
         );
 
-
         if (!response.ok) {
-
           setVoiceStatus(
             data.detail ||
               data.error ||
@@ -812,16 +688,12 @@ function App() {
           return;
         }
 
-
         const generatedAnswer =
           data.answer || "";
-
 
         const generatedSources =
           data.sources || [];
 
-
-        // Add question + answer
         setConversation(
           (previousConversation) => [
             ...previousConversation,
@@ -844,25 +716,19 @@ function App() {
           ]
         );
 
-
-        // Speak answer
         if (
           generatedAnswer.trim()
         ) {
-
           await speakAnswer(
             generatedAnswer
           );
-
         } else {
-
           setVoiceStatus(
             "No answer was generated."
           );
         }
 
       } catch (error) {
-
         console.error(
           "Ask error:",
           error
@@ -875,25 +741,20 @@ function App() {
     };
 
 
-  // =========================================================
   // FLOAT32 → 16 BIT PCM
-  // =========================================================
 
   const floatTo16BitPCM =
     (float32Array) => {
-
       const output =
         new Int16Array(
           float32Array.length
         );
-
 
       for (
         let i = 0;
         i < float32Array.length;
         i++
       ) {
-
         const sample =
           Math.max(
             -1,
@@ -903,29 +764,22 @@ function App() {
             )
           );
 
-
         if (
           sample < 0
         ) {
-
           output[i] =
             sample * 0x8000;
-
         } else {
-
           output[i] =
             sample * 0x7fff;
         }
       }
 
-
       return output;
     };
 
 
-  // =========================================================
   // DOWNSAMPLE AUDIO
-  // =========================================================
 
   const downsampleAudio =
     (
@@ -933,7 +787,6 @@ function App() {
       inputSampleRate,
       outputSampleRate
     ) => {
-
       if (
         outputSampleRate >=
         inputSampleRate
@@ -941,11 +794,9 @@ function App() {
         return audioData;
       }
 
-
       const ratio =
         inputSampleRate /
         outputSampleRate;
-
 
       const newLength =
         Math.round(
@@ -953,34 +804,28 @@ function App() {
             ratio
         );
 
-
       const result =
         new Float32Array(
           newLength
         );
 
-
       let offsetResult = 0;
 
       let offsetBuffer = 0;
-
 
       while (
         offsetResult <
         result.length
       ) {
-
         const nextOffsetBuffer =
           Math.round(
             (offsetResult + 1) *
               ratio
           );
 
-
         let accum = 0;
 
         let count = 0;
-
 
         for (
           let i = offsetBuffer;
@@ -990,13 +835,11 @@ function App() {
 
           i++
         ) {
-
           accum +=
             audioData[i];
 
           count++;
         }
-
 
         result[
           offsetResult
@@ -1005,31 +848,25 @@ function App() {
             ? accum / count
             : 0;
 
-
         offsetResult++;
 
         offsetBuffer =
           nextOffsetBuffer;
       }
 
-
       return result;
     };
 
 
-  // =========================================================
   // CREATE WAV
-  // =========================================================
 
   const createWavBlob =
     (
       audioData,
       sampleRate
     ) => {
-
       const targetSampleRate =
         16000;
-
 
       const downsampled =
         downsampleAudio(
@@ -1038,12 +875,10 @@ function App() {
           targetSampleRate
         );
 
-
       const pcmData =
         floatTo16BitPCM(
           downsampled
         );
-
 
       const buffer =
         new ArrayBuffer(
@@ -1051,25 +886,21 @@ function App() {
             pcmData.length * 2
         );
 
-
       const view =
         new DataView(
           buffer
         );
-
 
       const writeString =
         (
           offset,
           string
         ) => {
-
           for (
             let i = 0;
             i < string.length;
             i++
           ) {
-
             view.setUint8(
               offset + i,
               string.charCodeAt(i)
@@ -1077,13 +908,10 @@ function App() {
           }
         };
 
-
-      // RIFF
       writeString(
         0,
         "RIFF"
       );
-
 
       view.setUint32(
         4,
@@ -1092,20 +920,15 @@ function App() {
         true
       );
 
-
-      // WAVE
       writeString(
         8,
         "WAVE"
       );
 
-
-      // fmt
       writeString(
         12,
         "fmt "
       );
-
 
       view.setUint32(
         16,
@@ -1113,61 +936,46 @@ function App() {
         true
       );
 
-
-      // PCM
       view.setUint16(
         20,
         1,
         true
       );
 
-
-      // Mono
       view.setUint16(
         22,
         1,
         true
       );
 
-
-      // Sample rate
       view.setUint32(
         24,
         targetSampleRate,
         true
       );
 
-
-      // Byte rate
       view.setUint32(
         28,
         targetSampleRate * 2,
         true
       );
 
-
-      // Block align
       view.setUint16(
         32,
         2,
         true
       );
 
-
-      // Bits per sample
       view.setUint16(
         34,
         16,
         true
       );
 
-
-      // data
       writeString(
         36,
         "data"
       );
-
 
       view.setUint32(
         40,
@@ -1175,16 +983,13 @@ function App() {
         true
       );
 
-
       let offset = 44;
-
 
       for (
         let i = 0;
         i < pcmData.length;
         i++
       ) {
-
         view.setInt16(
           offset,
           pcmData[i],
@@ -1193,7 +998,6 @@ function App() {
 
         offset += 2;
       }
-
 
       return new Blob(
         [buffer],
@@ -1204,30 +1008,23 @@ function App() {
     };
 
 
-  // =========================================================
   // TRANSCRIBE AUDIO
-  // =========================================================
 
   const transcribeAudio =
     async (audioBlob) => {
-
       try {
-
         setVoiceStatus(
           "Understanding your question..."
         );
 
-
         const formData =
           new FormData();
-
 
         formData.append(
           "audio",
           audioBlob,
           "recording.wav"
         );
-
 
         const response =
           await fetch(
@@ -1239,19 +1036,15 @@ function App() {
             }
           );
 
-
         const data =
           await response.json();
-
 
         console.log(
           "Transcription response:",
           data
         );
 
-
         if (!response.ok) {
-
           setVoiceStatus(
             data.detail ||
               data.error ||
@@ -1261,34 +1054,27 @@ function App() {
           return;
         }
 
-
         const recognizedText =
           data.text || "";
-
 
         console.log(
           "Recognized question:",
           recognizedText
         );
 
-
         if (
           recognizedText.trim()
         ) {
-
           await askQuestion(
             recognizedText
           );
-
         } else {
-
           setVoiceStatus(
             "I could not understand the question. Please try again."
           );
         }
 
       } catch (error) {
-
         console.error(
           "Transcription error:",
           error
@@ -1301,33 +1087,26 @@ function App() {
     };
 
 
-  // =========================================================
   // FINISH RECORDING
-  // =========================================================
 
   const finishRecording =
     async () => {
-
       if (
         stoppingRef.current
       ) {
         return;
       }
 
-
       stoppingRef.current =
         true;
-
 
       setIsRecording(
         false
       );
 
-
       if (
         processorRef.current
       ) {
-
         processorRef.current
           .disconnect();
 
@@ -1335,11 +1114,9 @@ function App() {
           null;
       }
 
-
       if (
         microphoneSourceRef.current
       ) {
-
         microphoneSourceRef.current
           .disconnect();
 
@@ -1347,11 +1124,9 @@ function App() {
           null;
       }
 
-
       if (
         silentGainRef.current
       ) {
-
         silentGainRef.current
           .disconnect();
 
@@ -1359,11 +1134,9 @@ function App() {
           null;
       }
 
-
       if (
         streamRef.current
       ) {
-
         streamRef.current
           .getTracks()
           .forEach(
@@ -1376,17 +1149,13 @@ function App() {
           null;
       }
 
-
       const chunks =
         audioChunksRef.current;
-
 
       audioChunksRef.current =
         [];
 
-
       let totalLength = 0;
-
 
       chunks.forEach(
         (chunk) => {
@@ -1395,20 +1164,16 @@ function App() {
         }
       );
 
-
       if (
         totalLength === 0
       ) {
-
         setVoiceStatus(
           "No speech was recorded. Please try again."
         );
 
-
         if (
           audioContextRef.current
         ) {
-
           try {
             await audioContextRef.current.close();
           } catch (error) {
@@ -1419,26 +1184,21 @@ function App() {
             null;
         }
 
-
         stoppingRef.current =
           false;
 
         return;
       }
 
-
       const combinedAudio =
         new Float32Array(
           totalLength
         );
 
-
       let offset = 0;
-
 
       chunks.forEach(
         (chunk) => {
-
           combinedAudio.set(
             chunk,
             offset
@@ -1449,18 +1209,15 @@ function App() {
         }
       );
 
-
       const wavBlob =
         createWavBlob(
           combinedAudio,
           sampleRateRef.current
         );
 
-
       if (
         audioContextRef.current
       ) {
-
         try {
           await audioContextRef.current.close();
         } catch (error) {
@@ -1471,33 +1228,26 @@ function App() {
           null;
       }
 
-
       await transcribeAudio(
         wavBlob
       );
-
 
       stoppingRef.current =
         false;
     };
 
 
-  // =========================================================
   // SILENCE DETECTION
-  // =========================================================
 
   const checkSilence =
     (audioBuffer) => {
-
       let sum = 0;
-
 
       for (
         let i = 0;
         i < audioBuffer.length;
         i++
       ) {
-
         const sample =
           audioBuffer[i];
 
@@ -1505,42 +1255,34 @@ function App() {
           sample * sample;
       }
 
-
       const rms =
         Math.sqrt(
           sum /
             audioBuffer.length
         );
 
-
       const SILENCE_THRESHOLD =
         0.015;
-
 
       if (
         rms <
         SILENCE_THRESHOLD
       ) {
-
         if (
           silenceStartRef.current ===
           null
         ) {
-
           silenceStartRef.current =
             Date.now();
-
 
           console.log(
             "Silence started..."
           );
         }
 
-
         const silenceDuration =
           Date.now() -
           silenceStartRef.current;
-
 
         const silenceSeconds =
           Math.floor(
@@ -1548,73 +1290,55 @@ function App() {
               1000
           );
 
-
         console.log(
           `Silence duration: ${silenceSeconds} seconds`
         );
-
 
         if (
           silenceDuration >=
           5000
         ) {
-
           console.log(
             "5 seconds of silence detected."
           );
-
 
           setVoiceStatus(
             "Silence detected. Processing..."
           );
 
-
           finishRecording();
-
 
           return true;
         }
 
       } else {
-
         silenceStartRef.current =
           null;
       }
-
 
       return false;
     };
 
 
-  // =========================================================
   // START RECORDING
-  // =========================================================
 
   const startRecording =
     async () => {
-
       try {
-
-        // Stop current TTS
         stopSpeaking();
-
 
         setVoiceStatus(
           "Requesting microphone..."
         );
 
-
         stoppingRef.current =
           false;
-
 
         silenceStartRef.current =
           null;
 
-
         audioChunksRef.current =
           [];
-
 
         const stream =
           await navigator.mediaDevices
@@ -1635,44 +1359,34 @@ function App() {
               },
             });
 
-
         streamRef.current =
           stream;
-
 
         const AudioContext =
           window.AudioContext ||
           window.webkitAudioContext;
 
-
         if (!AudioContext) {
-
           throw new Error(
             "Web Audio API is not supported."
           );
         }
 
-
         const audioContext =
           new AudioContext();
 
-
         audioContextRef.current =
           audioContext;
-
 
         if (
           audioContext.state ===
           "suspended"
         ) {
-
           await audioContext.resume();
         }
 
-
         sampleRateRef.current =
           audioContext.sampleRate;
-
 
         const microphoneSource =
           audioContext
@@ -1680,10 +1394,8 @@ function App() {
               stream
             );
 
-
         microphoneSourceRef.current =
           microphoneSource;
-
 
         const processor =
           audioContext
@@ -1693,32 +1405,25 @@ function App() {
               1
             );
 
-
         processorRef.current =
           processor;
-
 
         const silentGain =
           audioContext.createGain();
 
-
         silentGain.gain.value =
           0;
-
 
         silentGainRef.current =
           silentGain;
 
-
         processor.onaudioprocess =
           (event) => {
-
             if (
               stoppingRef.current
             ) {
               return;
             }
-
 
             const inputData =
               event.inputBuffer
@@ -1726,85 +1431,69 @@ function App() {
                   0
                 );
 
-
             const audioCopy =
               new Float32Array(
                 inputData.length
               );
 
-
             audioCopy.set(
               inputData
             );
 
-
             audioChunksRef.current.push(
               audioCopy
             );
-
 
             checkSilence(
               inputData
             );
           };
 
-
         microphoneSource.connect(
           processor
         );
-
 
         processor.connect(
           silentGain
         );
 
-
         silentGain.connect(
           audioContext.destination
         );
-
 
         setIsRecording(
           true
         );
 
-
         setVoiceStatus(
           "🎤 Listening... Speak your question."
         );
 
-
         console.log(
           "Microphone access granted."
         );
-
 
         console.log(
           "Recording started."
         );
 
       } catch (error) {
-
         console.error(
           "Microphone error:",
           error
         );
 
-
         setIsRecording(
           false
         );
-
 
         setVoiceStatus(
           "Could not access microphone. Please allow microphone permission."
         );
 
-
         if (
           streamRef.current
         ) {
-
           streamRef.current
             .getTracks()
             .forEach(
@@ -1813,16 +1502,13 @@ function App() {
               }
             );
 
-
           streamRef.current =
             null;
         }
 
-
         if (
           audioContextRef.current
         ) {
-
           try {
             await audioContextRef.current.close();
           } catch (closeError) {
@@ -1831,7 +1517,6 @@ function App() {
             );
           }
 
-
           audioContextRef.current =
             null;
         }
@@ -1839,13 +1524,10 @@ function App() {
     };
 
 
-  // =========================================================
   // MANUAL STOP
-  // =========================================================
 
   const stopRecording =
     () => {
-
       silenceStartRef.current =
         null;
 
@@ -1853,16 +1535,10 @@ function App() {
     };
 
 
-  // =========================================================
   // UI
-  // =========================================================
 
   return (
     <div className="app">
-
-      {/* =====================================================
-          SIDEBAR
-          ===================================================== */}
 
       <aside className="sidebar">
 
@@ -1879,16 +1555,11 @@ function App() {
         </div>
 
 
-        {/* ===================================================
-            FILE UPLOAD
-            =================================================== */}
-
         <div className="source-section">
 
           <h3>
             📄 Upload Files
           </h3>
-
 
           <label className="file-input">
 
@@ -1919,7 +1590,6 @@ function App() {
                 Selected Files
               </div>
 
-
               {files.map(
                 (file, index) => (
 
@@ -1935,11 +1605,9 @@ function App() {
                       📄
                     </span>
 
-
                     <span className="file-name">
                       {file.name}
                     </span>
-
 
                     <button
                       type="button"
@@ -1980,16 +1648,11 @@ function App() {
         </div>
 
 
-        {/* ===================================================
-            WEBSITE URL
-            =================================================== */}
-
         <div className="source-section">
 
           <h3>
             🔗 Add Website
           </h3>
-
 
           <input
             ref={urlInputRef}
@@ -2011,12 +1674,10 @@ function App() {
             }
 
             onKeyDown={(event) => {
-
               if (
                 event.key ===
                 "Enter"
               ) {
-
                 event.preventDefault();
 
                 addUrl();
@@ -2083,7 +1744,6 @@ function App() {
                 Added Websites
               </div>
 
-
               {urls.map(
                 (item, index) => (
 
@@ -2099,11 +1759,9 @@ function App() {
                       🔗
                     </span>
 
-
                     <span className="file-name">
                       {item}
                     </span>
-
 
                     <button
                       type="button"
@@ -2131,10 +1789,6 @@ function App() {
         </div>
 
 
-        {/* ===================================================
-            PROCESS SOURCES
-            =================================================== */}
-
         <div className="source-section">
 
           <button
@@ -2152,10 +1806,6 @@ function App() {
         </div>
 
 
-        {/* ===================================================
-            SOURCE MESSAGE
-            =================================================== */}
-
         {sourceMessage && (
 
           <div className="source-message">
@@ -2170,10 +1820,6 @@ function App() {
 
       </aside>
 
-
-      {/* =====================================================
-          MAIN CHAT
-          ===================================================== */}
 
       <main className="main">
 
@@ -2203,10 +1849,6 @@ function App() {
         </header>
 
 
-        {/* ===================================================
-            CHAT AREA
-            =================================================== */}
-
         <section className="chat-area">
 
           {conversation.length === 0 ? (
@@ -2217,11 +1859,9 @@ function App() {
                 🎙️
               </div>
 
-
               <h2>
                 How can I help you?
               </h2>
-
 
               <p>
                 Upload your documents or add
@@ -2229,7 +1869,6 @@ function App() {
                 then ask your question using
                 your voice.
               </p>
-
 
               <div className="welcome-examples">
 
@@ -2304,7 +1943,6 @@ function App() {
                               Sources
                             </div>
 
-
                             {message.sources.map(
                               (
                                 source,
@@ -2322,7 +1960,6 @@ function App() {
                                   <span>
                                     📄
                                   </span>
-
 
                                   <span>
                                     {
@@ -2353,10 +1990,6 @@ function App() {
 
         </section>
 
-
-        {/* ===================================================
-            VOICE AREA
-            =================================================== */}
 
         <section className="voice-area">
 

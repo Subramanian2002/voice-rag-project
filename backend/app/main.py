@@ -1,23 +1,33 @@
+import os
+import tempfile
+import uuid
+
+from dotenv import load_dotenv
+
 from fastapi import (
     FastAPI,
     UploadFile,
     File,
-    HTTPException
+    HTTPException,
+    Header
 )
 
-import os
-import tempfile
+from pydantic import (
+    BaseModel,
+    Field
+)
 
-from pydantic import BaseModel, Field
+from fastapi.middleware.cors import (
+    CORSMiddleware
+)
 
-from fastapi.openapi.utils import get_openapi
+from fastapi.responses import (
+    FileResponse
+)
 
-from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi.responses import FileResponse
-
-# PROJECT IMPORTS
-from app.scraper import scrape_url
+from app.scraper import (
+    scrape_url
+)
 
 from app.sources import (
     uploaded_sources,
@@ -29,44 +39,81 @@ from app.processor import (
     answer_question
 )
 
-from app.speech import transcribe_audio
+from app.speech import (
+    transcribe_audio
+)
 
-from app.tts import generate_speech
-
-
-
-# FASTAPI APP
-
-app = FastAPI()
+from app.tts import (
+    generate_speech
+)
 
 
+# ============================================================
+# LOAD ENVIRONMENT
+# ============================================================
 
+load_dotenv()
+
+
+# ============================================================
+# FASTAPI APPLICATION
+# ============================================================
+
+app = FastAPI(
+    title="QUiRRI RAG API",
+    version="1.0.0"
+)
+
+
+# ============================================================
 # CORS
+# ============================================================
+
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
     "http://localhost:5173"
 )
 
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    FRONTEND_URL
+]
+
+ALLOWED_ORIGINS = list(
+    dict.fromkeys(
+        ALLOWED_ORIGINS
+    )
+)
+
 app.add_middleware(
     CORSMiddleware,
-
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        FRONTEND_URL,
-    ],
-
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-
     allow_methods=["*"],
-
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 
+# ============================================================
+# UPLOAD CONFIGURATION
+# ============================================================
 
+BASE_DIR = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
 
-UPLOAD_DIR = "uploads"
+UPLOAD_DIR = os.path.join(
+    BASE_DIR,
+    "uploads"
+)
+
+os.makedirs(
+    UPLOAD_DIR,
+    exist_ok=True
+)
 
 ALLOWED_EXTENSIONS = {
     ".pdf",
@@ -74,15 +121,50 @@ ALLOWED_EXTENSIONS = {
     ".pptx"
 }
 
-os.makedirs(
-    UPLOAD_DIR,
-    exist_ok=True
-)
+
+# ============================================================
+# SESSION VALIDATION
+# ============================================================
+
+def validate_session_id(
+    session_id: str
+) -> str:
+
+    if session_id is None:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-Session-ID header "
+                "is required."
+            )
+        )
+
+    session_id = session_id.strip()
+
+    if not session_id:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Session ID cannot "
+                "be empty."
+            )
+        )
+
+    if len(session_id) > 200:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid session ID."
+        )
+
+    return session_id
 
 
-
+# ============================================================
 # HEALTH CHECK
-
+# ============================================================
 
 @app.get("/health")
 def health_check():
@@ -92,41 +174,78 @@ def health_check():
     }
 
 
+# ============================================================
+# ROOT
+# ============================================================
 
+@app.get("/")
+def root():
+
+    return {
+        "message":
+            "QUiRRI RAG API is running",
+
+        "status":
+            "healthy"
+    }
+
+
+# ============================================================
 # FILE UPLOAD
-
+# ============================================================
 
 @app.post("/upload")
 async def upload_files(
-    files: list[UploadFile] = File(...)
+
+    files: list[UploadFile] = File(...),
+
+    session_id: str = Header(
+        ...,
+        alias="X-Session-ID"
+    )
 ):
+
+    session_id = validate_session_id(
+        session_id
+    )
+
+    if not files:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Please select at least "
+                "one file."
+            )
+        )
+
+    if session_id not in uploaded_sources:
+
+        uploaded_sources[
+            session_id
+        ] = []
 
     uploaded_files = []
 
     for file in files:
 
-        
-        # Validate filename
-        
-
         if not file.filename:
 
             raise HTTPException(
                 status_code=400,
-                detail="File name is missing."
+                detail=(
+                    "File name is missing."
+                )
             )
 
-        
-        # Get extension
-        
+        original_filename = os.path.basename(
+            file.filename
+        )
 
         file_extension = os.path.splitext(
-            file.filename
+            original_filename
         )[1].lower()
 
-        
-        # Validate extension
-        
         if (
             file_extension
             not in ALLOWED_EXTENSIONS
@@ -134,25 +253,39 @@ async def upload_files(
 
             raise HTTPException(
                 status_code=400,
-
                 detail=(
                     f"Unsupported file type: "
-                    f"{file.filename}"
+                    f"{original_filename}. "
+                    f"Supported types: "
+                    f"PDF, TXT and PPTX."
                 )
             )
 
-        
-        # Save file
-        
+        safe_filename = (
+            f"{uuid.uuid4().hex}_"
+            f"{original_filename}"
+        )
 
         file_path = os.path.join(
             UPLOAD_DIR,
-            file.filename
+            safe_filename
         )
 
         try:
 
-            file_content = await file.read()
+            file_content = (
+                await file.read()
+            )
+
+            if not file_content:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"File is empty: "
+                        f"{original_filename}"
+                    )
+                )
 
             with open(
                 file_path,
@@ -163,35 +296,45 @@ async def upload_files(
                     file_content
                 )
 
+        except HTTPException:
+
+            raise
+
         except Exception as e:
 
             raise HTTPException(
                 status_code=500,
-
                 detail=(
                     f"Failed to save "
-                    f"{file.filename}: {str(e)}"
+                    f"{original_filename}: "
+                    f"{str(e)}"
                 )
             )
 
-        
-        # Store source metadata
-        
+        finally:
 
-        uploaded_sources.append(
+            await file.close()
+
+        uploaded_sources[
+            session_id
+        ].append(
             {
-                "file_path": file_path,
+                "file_path":
+                    file_path,
 
                 "source_name":
-                    file.filename,
+                    original_filename,
 
                 "source_type":
-                    file_extension.lstrip(".")
+                    file_extension.lstrip("."),
+
+                "session_id":
+                    session_id
             }
         )
 
         uploaded_files.append(
-            file.filename
+            original_filename
         )
 
     return {
@@ -203,26 +346,37 @@ async def upload_files(
     }
 
 
+# ============================================================
 # URL REQUEST MODEL
+# ============================================================
 
-class URLRequest(BaseModel):
+class URLRequest(
+    BaseModel
+):
 
     url: str
 
 
-
+# ============================================================
 # ADD WEBSITE URL
+# ============================================================
 
 @app.post("/add-url")
 def add_url(
-    request: URLRequest
+
+    request: URLRequest,
+
+    session_id: str = Header(
+        ...,
+        alias="X-Session-ID"
+    )
 ):
 
-    url = request.url.strip()
+    session_id = validate_session_id(
+        session_id
+    )
 
-    
-    # Validate empty URL
-    
+    url = request.url.strip()
 
     if not url:
 
@@ -231,33 +385,87 @@ def add_url(
             detail="URL cannot be empty."
         )
 
+    if session_id not in url_sources:
+
+        url_sources[
+            session_id
+        ] = []
+
+    normalized_current_url = (
+        url
+        .strip()
+        .rstrip("/")
+        .lower()
+    )
+
+    for source in url_sources[
+        session_id
+    ]:
+
+        existing_url = (
+            source.get(
+                "url",
+                ""
+            )
+            .strip()
+            .rstrip("/")
+            .lower()
+        )
+
+        if (
+            existing_url
+            == normalized_current_url
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This URL has "
+                    "already been added."
+                )
+            )
+
     try:
 
         print(
             f"Scraping URL: {url}"
         )
 
-        #Scrape website
-        
         text = scrape_url(
             url
         )
 
-        
-        # Store URL source
-        
-        url_sources.append(
+        if not text or not text.strip():
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The webpage did not "
+                    "contain readable content."
+                )
+            )
+
+        url_sources[
+            session_id
+        ].append(
             {
-                "url": url,
+                "url":
+                    url,
 
-                "text": text,
+                "text":
+                    text,
 
-                "source_type": "url"
+                "source_type":
+                    "url",
+
+                "session_id":
+                    session_id
             }
         )
 
         print(
-            f"URL scraped successfully: {url}"
+            f"URL scraped successfully: "
+            f"{url}"
         )
 
         return {
@@ -265,11 +473,12 @@ def add_url(
                 "URL scraped successfully",
 
             "source_url":
-                url,
-
-            "text":
-                text
+                url
         }
+
+    except HTTPException:
+
+        raise
 
     except ValueError as e:
 
@@ -290,7 +499,6 @@ def add_url(
 
         raise HTTPException(
             status_code=500,
-
             detail=(
                 "Failed to process URL: "
                 f"{str(e)}"
@@ -298,21 +506,96 @@ def add_url(
         )
 
 
-
+# ============================================================
 # PROCESS SOURCES
-
+# ============================================================
 
 @app.post("/process")
-def process_sources():
+def process_sources(
+
+    session_id: str = Header(
+        ...,
+        alias="X-Session-ID"
+    )
+):
+
+    session_id = validate_session_id(
+        session_id
+    )
 
     try:
 
+        session_uploaded_sources = (
+            uploaded_sources.get(
+                session_id,
+                []
+            )
+        )
+
+        session_url_sources = (
+            url_sources.get(
+                session_id,
+                []
+            )
+        )
+
+        print(
+            "================================"
+        )
+
+        print(
+            "Processing session:",
+            session_id
+        )
+
+        print(
+            "Files:",
+            len(
+                session_uploaded_sources
+            )
+        )
+
+        print(
+            "URLs:",
+            len(
+                session_url_sources
+            )
+        )
+
+        print(
+            "================================"
+        )
+
+        if (
+            not session_uploaded_sources
+            and
+            not session_url_sources
+        ):
+
+            return {
+                "message":
+                    "No sources found "
+                    "for this session.",
+
+                "files_processed":
+                    0,
+
+                "urls_processed":
+                    0,
+
+                "chunks_stored":
+                    0
+            }
+
         result = process_all_sources(
             uploaded_sources=
-                uploaded_sources,
+                session_uploaded_sources,
 
             url_sources=
-                url_sources
+                session_url_sources,
+
+            session_id=
+                session_id
         )
 
         return {
@@ -331,7 +614,6 @@ def process_sources():
 
         raise HTTPException(
             status_code=500,
-
             detail=(
                 "Source processing failed: "
                 f"{str(e)}"
@@ -339,10 +621,13 @@ def process_sources():
         )
 
 
-
+# ============================================================
 # ASK REQUEST MODEL
+# ============================================================
 
-class AskRequest(BaseModel):
+class AskRequest(
+    BaseModel
+):
 
     question: str
 
@@ -351,50 +636,122 @@ class AskRequest(BaseModel):
     )
 
 
-
+# ============================================================
 # ASK QUESTION
-
+# ============================================================
 
 @app.post("/ask")
 def ask_question(
-    request: AskRequest
+
+    request: AskRequest,
+
+    session_id: str = Header(
+        ...,
+        alias="X-Session-ID"
+    )
 ):
+
+    session_id = validate_session_id(
+        session_id
+    )
 
     question = request.question.strip()
 
-    
-    # Validate question
-   
     if not question:
 
         raise HTTPException(
             status_code=400,
-
-            detail="Question cannot be empty."
+            detail=(
+                "Question cannot be empty."
+            )
         )
 
     try:
+
+        session_uploaded_sources = (
+            uploaded_sources.get(
+                session_id,
+                []
+            )
+        )
+
+        session_url_sources = (
+            url_sources.get(
+                session_id,
+                []
+            )
+        )
+
+        print(
+            "================================"
+        )
+
+        print(
+            f"Session: {session_id}"
+        )
 
         print(
             f"Question: {question}"
         )
 
         print(
-            "Conversation history length:",
+            "Current files:",
+            len(
+                session_uploaded_sources
+            )
+        )
+
+        print(
+            "Current URLs:",
+            len(
+                session_url_sources
+            )
+        )
+
+        print(
+            "Conversation history:",
             len(
                 request.conversation_history
             )
         )
 
-        
-        # RAG
-        
+        print(
+            "================================"
+        )
+
+        # IMPORTANT:
+        # Never search Qdrant when the current session
+        # has no active sources.
+        #
+        # Qdrant is persistent, while uploaded_sources
+        # and url_sources are in-memory. Therefore old
+        # vectors can exist even when the current session
+        # has no current sources.
+
+        if (
+            not session_uploaded_sources
+            and
+            not session_url_sources
+        ):
+
+            return {
+                "answer":
+                    "I could not find that information "
+                    "in the provided sources.",
+
+                "sources":
+                    []
+            }
 
         result = answer_question(
-            question=question,
+            question=
+                question,
 
             conversation_history=
-                request.conversation_history
+                request.conversation_history,
+
+            session_id=
+                session_id
         )
 
         return result
@@ -408,7 +765,6 @@ def ask_question(
 
         raise HTTPException(
             status_code=500,
-
             detail=(
                 "Failed to generate answer: "
                 f"{str(e)}"
@@ -416,60 +772,70 @@ def ask_question(
         )
 
 
-
+# ============================================================
 # TRANSCRIBE VOICE
-
+# ============================================================
 
 @app.post("/transcribe")
 async def transcribe_voice(
+
     audio: UploadFile = File(...)
 ):
 
     try:
 
-        
-        # Read audio
-        
-
-        audio_bytes = await audio.read()
-
-        
-        # Validate audio
-        
+        audio_bytes = (
+            await audio.read()
+        )
 
         if not audio_bytes:
 
             raise HTTPException(
                 status_code=400,
-
-                detail=
+                detail=(
                     "No audio data received."
+                )
             )
 
-        # Log
+        filename = (
+            audio.filename
+            or
+            "recording.webm"
+        )
+
         print(
             f"Received audio: "
-            f"{audio.filename} "
+            f"{filename} "
             f"({len(audio_bytes)} bytes)"
         )
 
-        
-        # Whisper
         text = transcribe_audio(
-            audio_bytes=audio_bytes,
+            audio_bytes=
+                audio_bytes,
 
-            filename=(
-                audio.filename
-                or "recording.wav"
-            )
+            filename=
+                filename
         )
+
+        text = text.strip()
+
+        if not text:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not understand "
+                    "the recorded audio."
+                )
+            )
 
         print(
             f"Transcription: {text}"
         )
 
         return {
-            "text": text
+            "text":
+                text
         }
 
     except HTTPException:
@@ -485,7 +851,6 @@ async def transcribe_voice(
 
         raise HTTPException(
             status_code=500,
-
             detail=(
                 "Transcription failed: "
                 f"{str(e)}"
@@ -493,77 +858,88 @@ async def transcribe_voice(
         )
 
 
-
+# ============================================================
 # TTS REQUEST MODEL
+# ============================================================
 
-class TTSRequest(BaseModel):
+class TTSRequest(
+    BaseModel
+):
 
     text: str
 
 
-
+# ============================================================
 # TEXT TO SPEECH
+# ============================================================
 
 @app.post("/tts")
 async def text_to_speech(
+
     request: TTSRequest
 ):
 
     text = request.text.strip()
 
-    
-    # Validate
-    
     if not text:
 
         raise HTTPException(
             status_code=400,
-
-            detail=
+            detail=(
                 "Text cannot be empty."
+            )
         )
 
-    # Temporary MP3
-    temp_file = tempfile.NamedTemporaryFile(
-        delete=False,
-
-        suffix=".mp3"
-    )
-
-    output_path = temp_file.name
-
-    temp_file.close()
+    temp_file = None
 
     try:
-        
-        # Generate speech
-        await generate_speech(
-            text=text,
 
-            output_file=output_path
+        temp_file = (
+            tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".mp3"
+            )
         )
 
-        
-        # Return MP3
+        output_path = (
+            temp_file.name
+        )
+
+        temp_file.close()
+
+        await generate_speech(
+            text=text,
+            output_file=
+                output_path
+        )
+
         return FileResponse(
             output_path,
-
-            media_type="audio/mpeg",
-
-            filename="answer.mp3"
+            media_type=
+                "audio/mpeg",
+            filename=
+                "answer.mp3"
         )
 
     except Exception as e:
 
-        
-        # Delete failed file
-        if os.path.exists(
-            output_path
+        if (
+            temp_file
+            and
+            os.path.exists(
+                temp_file.name
+            )
         ):
 
-            os.remove(
-                output_path
-            )
+            try:
+
+                os.remove(
+                    temp_file.name
+                )
+
+            except Exception:
+
+                pass
 
         print(
             "TTS error:",
@@ -572,9 +948,8 @@ async def text_to_speech(
 
         raise HTTPException(
             status_code=500,
-
             detail=(
-                f"TTS generation failed: "
+                "TTS generation failed: "
                 f"{str(e)}"
             )
         )

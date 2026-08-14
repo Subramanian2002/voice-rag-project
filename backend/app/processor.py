@@ -14,7 +14,8 @@ from app.embeddings import (
 
 from app.qdrant_db import (
     store_embedding,
-    search_embeddings
+    search_embeddings,
+    delete_session_vectors
 )
 
 from app.llm import (
@@ -22,8 +23,8 @@ from app.llm import (
 )
 
 
-
 # FILE TEXT EXTRACTION
+
 def extract_file_text(
     source: dict
 ) -> str:
@@ -60,9 +61,7 @@ def extract_file_text(
     )
 
 
-
 # PROCESS FILE
-
 
 def process_file(
     source: dict
@@ -72,7 +71,7 @@ def process_file(
         source
     )
 
-    if not text.strip():
+    if not text or not text.strip():
 
         raise ValueError(
             f"No text found in "
@@ -93,9 +92,7 @@ def process_file(
     return chunks
 
 
-
 # EMBEDDING
-
 
 def embed_chunks(
     chunks: list[str]
@@ -105,24 +102,48 @@ def embed_chunks(
 
     for chunk in chunks:
 
+        if not chunk or not chunk.strip():
+
+            continue
+
         vector = generate_embedding(
             chunk
         )
+
+        if not vector:
+
+            raise ValueError(
+                "Failed to generate embedding."
+            )
 
         embeddings.append(
             vector
         )
 
+    if not embeddings:
+
+        raise ValueError(
+            "No embeddings were generated."
+        )
+
     return embeddings
 
 
-
 # STORE CHUNKS
+
 def store_chunks(
     chunks: list[str],
     embeddings: list[list[float]],
-    source: dict
+    source: dict,
+    session_id: str
 ):
+
+    if len(chunks) != len(embeddings):
+
+        raise ValueError(
+            "Number of chunks and embeddings "
+            "does not match."
+        )
 
     for chunk, vector in zip(
         chunks,
@@ -132,13 +153,22 @@ def store_chunks(
         metadata = {
 
             "source_type":
-                source["source_type"],
+                source.get(
+                    "source_type"
+                ),
 
             "source_name":
-                source["source_name"],
+                source.get(
+                    "source_name"
+                ),
 
             "source_url":
-                source.get("source_url")
+                source.get(
+                    "source_url"
+                ),
+
+            "session_id":
+                session_id
         }
 
         store_embedding(
@@ -150,11 +180,11 @@ def store_chunks(
         )
 
 
-
 # PROCESS FILE SOURCE
 
 def process_source(
-    source: dict
+    source: dict,
+    session_id: str
 ):
 
     chunks = process_file(
@@ -170,28 +200,36 @@ def process_source(
 
         embeddings=embeddings,
 
-        source=source
+        source=source,
+
+        session_id=session_id
     )
 
     return len(chunks)
 
 
-
 # PROCESS URL SOURCE
 
 def process_url(
-    source: dict
+    source: dict,
+    session_id: str
 ):
 
-    text = source[
-        "text"
-    ]
+    text = source.get(
+        "text",
+        ""
+    )
 
-    if not text.strip():
+    url = source.get(
+        "url",
+        ""
+    )
+
+    if not text or not text.strip():
 
         raise ValueError(
             f"No text found for URL: "
-            f"{source['url']}"
+            f"{url}"
         )
 
     chunks = chunk_text(
@@ -202,7 +240,7 @@ def process_url(
 
         raise ValueError(
             f"No chunks generated for URL: "
-            f"{source['url']}"
+            f"{url}"
         )
 
     embeddings = embed_chunks(
@@ -215,10 +253,10 @@ def process_url(
             "url",
 
         "source_name":
-            source["url"],
+            url,
 
         "source_url":
-            source["url"]
+            url
     }
 
     store_chunks(
@@ -226,18 +264,20 @@ def process_url(
 
         embeddings=embeddings,
 
-        source=source_metadata
+        source=source_metadata,
+
+        session_id=session_id
     )
 
     return len(chunks)
-
 
 
 # PROCESS ALL SOURCES
 
 def process_all_sources(
     uploaded_sources: list,
-    url_sources: list
+    url_sources: list,
+    session_id: str
 ):
 
     total_files = 0
@@ -247,11 +287,23 @@ def process_all_sources(
     total_chunks = 0
 
 
-    
+    # IMPORTANT:
+    # Remove old Qdrant vectors for this session
+    # before storing the current sources.
+
+    delete_session_vectors(
+        session_id
+    )
+
+
+    # PROCESS FILES
+
     for source in uploaded_sources:
 
         chunks = process_source(
-            source
+            source=source,
+
+            session_id=session_id
         )
 
         total_files += 1
@@ -259,14 +311,14 @@ def process_all_sources(
         total_chunks += chunks
 
 
-    
-    # URLs
-    
+    # PROCESS URLS
 
     for source in url_sources:
 
         chunks = process_url(
-            source
+            source=source,
+
+            session_id=session_id
         )
 
         total_urls += 1
@@ -287,7 +339,6 @@ def process_all_sources(
     }
 
 
-
 # BUILD RAG CONTEXT
 
 def build_context(
@@ -298,7 +349,12 @@ def build_context(
 
     for result in results:
 
-        text = result.payload.get(
+        payload = (
+            result.payload
+            or {}
+        )
+
+        text = payload.get(
             "text",
             ""
         )
@@ -315,6 +371,7 @@ def build_context(
 
 
 # BUILD CONVERSATION HISTORY
+
 def build_conversation_history(
     conversation_history:
         list[dict] | None
@@ -324,9 +381,7 @@ def build_conversation_history(
 
         return ""
 
-
     history_parts = []
-
 
     for message in conversation_history:
 
@@ -340,21 +395,17 @@ def build_conversation_history(
             ""
         )
 
-
         if not content:
 
             continue
-
 
         content = str(
             content
         ).strip()
 
-
         if not content:
 
             continue
-
 
         if role == "user":
 
@@ -362,113 +413,31 @@ def build_conversation_history(
                 f"User: {content}"
             )
 
-
         elif role == "assistant":
 
             history_parts.append(
                 f"Assistant: {content}"
             )
 
-
     return "\n\n".join(
         history_parts
     )
 
 
+# BUILD SOURCES
 
-# ANSWER QUESTION
-
-def answer_question(
-    question: str,
-
-    conversation_history:
-        list[dict] | None = None,
-
-    limit: int = 5
-):
-
-    question = question.strip()
-
-
-    if not question:
-
-        return {
-
-            "answer":
-                "Please ask a question.",
-
-            "sources": []
-        }
-
-
-    
-    # Generate query embedding
-   
-    query_vector = generate_embedding(
-        question
-    )
-
-
-    # Search Qdrant
-    
-    results = search_embeddings(
-        query_vector=query_vector,
-
-        limit=limit
-    )
-    if not results:
-
-        return {
-
-            "answer":
-                "I could not find that information "
-                "in the provided sources.",
-
-            "sources": []
-        }
-
-
-    
-    # Build context
-    
-    context = build_context(
-        results
-    )
-
-
-    
-    # Build conversation history
-    
-    history_text = (
-        build_conversation_history(
-            conversation_history
-        )
-    )
-
-
-    
-    # Generate answer
-    
-    answer = generate_answer_with_fallback(
-
-        context=context,
-
-        question=question,
-
-        conversation_history=
-            history_text
-    )
-
+def build_sources(
+    results
+) -> list[dict]:
 
     sources = []
-
 
     for result in results:
 
         payload = (
             result.payload
+            or {}
         )
-
 
         source = {
 
@@ -488,12 +457,142 @@ def answer_question(
                 )
         }
 
-
         if source not in sources:
 
             sources.append(
                 source
             )
+
+    return sources
+
+
+# ANSWER QUESTION
+
+def answer_question(
+    question: str,
+
+    conversation_history:
+        list[dict] | None = None,
+
+    limit: int = 5,
+
+    session_id: str = ""
+):
+
+    question = question.strip()
+
+
+    if not question:
+
+        return {
+
+            "answer":
+                "Please ask a question.",
+
+            "sources":
+                []
+        }
+
+
+    if not session_id:
+
+        return {
+
+            "answer":
+                "I could not find that information "
+                "in the provided sources.",
+
+            "sources":
+                []
+        }
+
+
+    # Generate query embedding
+
+    query_vector = generate_embedding(
+        question
+    )
+
+
+    if not query_vector:
+
+        raise ValueError(
+            "Failed to generate query embedding."
+        )
+
+
+    # Search only inside this session.
+
+    results = search_embeddings(
+
+        query_vector=query_vector,
+
+        limit=limit,
+
+        session_id=session_id
+    )
+
+
+    if not results:
+
+        return {
+
+            "answer":
+                "I could not find that information "
+                "in the provided sources.",
+
+            "sources":
+                []
+        }
+
+
+    # Build context
+
+    context = build_context(
+        results
+    )
+
+
+    if not context.strip():
+
+        return {
+
+            "answer":
+                "I could not find that information "
+                "in the provided sources.",
+
+            "sources":
+                []
+        }
+
+
+    # Build conversation history
+
+    history_text = (
+        build_conversation_history(
+            conversation_history
+        )
+    )
+
+
+    # Generate answer
+
+    answer = generate_answer_with_fallback(
+
+        context=context,
+
+        question=question,
+
+        conversation_history=
+            history_text
+    )
+
+
+    # Build sources
+
+    sources = build_sources(
+        results
+    )
 
 
     return {
