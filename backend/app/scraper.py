@@ -30,7 +30,7 @@ MIN_TEXT_LENGTH = 100
 MAX_PAGES = 3
 
 # Maximum combined content stored from one website
-MAX_TOTAL_CHARACTERS = 20000
+MAX_TOTAL_CHARACTERS = 10000
 
 JINA_READER_URL = (
     "https://r.jina.ai/"
