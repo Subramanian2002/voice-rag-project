@@ -1154,5 +1154,4 @@ def scrape_url(
         f"{len(combined_text)}"
     )
 
-
     return combined_text
