@@ -31,7 +31,7 @@ MIN_TEXT_LENGTH = 100
 MAX_PAGES = 3
 
 # Maximum combined content stored from one website
-MAX_TOTAL_CHARACTERS = 10000
+MAX_TOTAL_CHARACTERS = 20000
 
 # Number of retries for HTTP requests
 REQUEST_RETRIES = 2
