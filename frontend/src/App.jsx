@@ -1,101 +1,46 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-function App() {
-  // BACKEND
-
-  const BACKEND_URL = "https://voice-rag-backend-pm0s.onrender.com";
+const BACKEND_URL = "https://voice-rag-backend-pm0s.onrender.com";
   // "http://127.0.0.1:8000";
   
 
-                                            
-  
+function App() {
+  const [SESSION_ID] = useState(() => crypto.randomUUID());
 
-  // SESSION ID
-  // Each browser tab gets its own session.
-  const SESSION_ID =
-    sessionStorage.getItem(
-      "voice_rag_session_id"
-    ) || crypto.randomUUID();
-
-  sessionStorage.setItem(
-    "voice_rag_session_id",
-    SESSION_ID
-  );
-
-
-  // SOURCE STATE
-
-  // Selected files
-  const [files, setFiles] = useState([]);
-
-  // Current URL in the URL field
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
   const [url, setUrl] = useState("");
-
-  // Successfully added URLs
   const [urls, setUrls] = useState([]);
+  const [sourceMessage, setSourceMessage] = useState("");
 
-  // Source status
-  const [sourceMessage, setSourceMessage] =
-    useState("");
-
-
-  // VOICE STATE
-
-  const [isRecording, setIsRecording] =
-    useState(false);
-
-  const [voiceStatus, setVoiceStatus] =
-    useState(
-      "Click the microphone and ask your question."
-    );
-
-
-  // CONVERSATION
-
-  const [conversation, setConversation] =
-    useState([]);
-
-
-  // REFERENCES
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("Click the microphone and ask your question.");
+  const [conversation, setConversation] = useState([]);
 
   const fileInputRef = useRef(null);
-
   const urlInputRef = useRef(null);
-
-  const audioContextRef = useRef(null);
-
-  const streamRef = useRef(null);
-
-  const microphoneSourceRef = useRef(null);
-
-  const processorRef = useRef(null);
-
-  const silentGainRef = useRef(null);
-
-  const audioChunksRef = useRef([]);
-
-  const sampleRateRef = useRef(48000);
-
-  const silenceStartRef = useRef(null);
-
-  const stoppingRef = useRef(false);
-
-  const ttsAudioRef = useRef(null);
-
   const chatEndRef = useRef(null);
 
+  const audioContextRef = useRef(null);
+  const streamRef = useRef(null);
+  const microphoneSourceRef = useRef(null);
+  const processorRef = useRef(null);
+  const silentGainRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const sampleRateRef = useRef(48000);
+  const silenceStartRef = useRef(null);
+  const stoppingRef = useRef(false);
+  const ttsAudioRef = useRef(null);
 
-  // AUTO SCROLL CHAT
+  const uploadingRef = useRef(false);
+  const processingRef = useRef(false);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversation]);
 
-
-  // STOP TTS
+  const getFileKey = (file) => `${file.name}__${file.size}__${file.lastModified}`;
 
   const stopSpeaking = () => {
     if (ttsAudioRef.current) {
@@ -105,1952 +50,1084 @@ function App() {
     }
   };
 
-
+  // ==========================================================
   // FILE SELECTION
+  // ==========================================================
 
   const handleFileSelection = (event) => {
-    const selectedFiles = Array.from(
-      event.target.files || []
-    );
+    const selected = Array.from(event.target.files || []);
 
-    if (selectedFiles.length === 0) {
-      return;
-    }
+    if (!selected.length) return;
 
-    setFiles((previousFiles) => {
-      const existingNames = new Set(
-        previousFiles.map(
-          (file) => file.name
-        )
-      );
-
+    setPendingFiles((previous) => {
+      const existing = new Set(previous.map(getFileKey));
       const newFiles = [];
+      let duplicates = 0;
 
-      const duplicateFiles = [];
+      for (const file of selected) {
+        const key = getFileKey(file);
 
-      selectedFiles.forEach((file) => {
-        if (existingNames.has(file.name)) {
-          duplicateFiles.push(
-            file.name
-          );
+        if (existing.has(key)) {
+          duplicates++;
         } else {
+          existing.add(key);
           newFiles.push(file);
-
-          existingNames.add(
-            file.name
-          );
         }
-      });
+      }
 
-      if (
-        duplicateFiles.length > 0 &&
-        newFiles.length === 0
-      ) {
-        if (
-          duplicateFiles.length === 1
-        ) {
-          setSourceMessage(
-            `"${duplicateFiles[0]}" is already present.`
-          );
-        } else {
-          setSourceMessage(
-            `${duplicateFiles.length} file(s) are already present.`
-          );
-        }
-      } else if (
-        duplicateFiles.length > 0 &&
-        newFiles.length > 0
-      ) {
+      if (duplicates && !newFiles.length) {
         setSourceMessage(
-          `${newFiles.length} new file(s) added. ` +
-          `${duplicateFiles.length} file(s) already present.`
+          duplicates === 1
+            ? "That file is already selected."
+            : `${duplicates} files are already selected.`
+        );
+      } else if (duplicates) {
+        setSourceMessage(
+          `${newFiles.length} new file(s) selected. ${duplicates} duplicate(s) skipped.`
         );
       } else {
-        setSourceMessage(
-          `${newFiles.length} file(s) selected.`
-        );
+        setSourceMessage(`${newFiles.length} file(s) selected.`);
       }
 
-      return [
-        ...previousFiles,
-        ...newFiles,
-      ];
+      return [...previous, ...newFiles];
     });
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    event.target.value = "";
   };
 
+  const removePendingFile = (file) => {
+    const key = getFileKey(file);
 
-  // REMOVE FILE
-
-  const removeFile = (fileName) => {
-    setFiles((previousFiles) =>
-      previousFiles.filter(
-        (file) => file.name !== fileName
-      )
+    setPendingFiles((previous) =>
+      previous.filter((item) => getFileKey(item) !== key)
     );
 
-    setSourceMessage(
-      `"${fileName}" removed.`
-    );
+    setSourceMessage("Selected file removed.");
   };
 
-
+  // ==========================================================
   // UPLOAD FILES
+  // ==========================================================
 
   const uploadFiles = async () => {
-    if (files.length === 0) {
-      setSourceMessage(
-        "Please select at least one file."
-      );
+    if (uploadingRef.current) return;
+
+    if (!pendingFiles.length) {
+      setSourceMessage("Please select at least one file.");
       return;
     }
 
-    const formData = new FormData();
-
-    files.forEach((file) => {
-      formData.append(
-        "files",
-        file
-      );
-    });
+    uploadingRef.current = true;
 
     try {
-      setSourceMessage(
-        `Uploading ${files.length} file(s)...`
-      );
+      setSourceMessage(`Uploading ${pendingFiles.length} file(s)...`);
 
-      const response =
-        await fetch(
-          `${BACKEND_URL}/upload`,
-          {
-            method: "POST",
+      const formData = new FormData();
 
-            headers: {
-              "X-Session-ID":
-                SESSION_ID,
-            },
+      pendingFiles.forEach((file) => {
+        formData.append("files", file);
+      });
 
-            body: formData,
-          }
-        );
+      const response = await fetch(`${BACKEND_URL}/upload`, {
+        method: "POST",
+        headers: { "X-Session-ID": SESSION_ID },
+        body: formData
+      });
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
-        setSourceMessage(
-          data.detail ||
-            data.error ||
-            "Upload failed."
-        );
-
+        setSourceMessage(data.detail || data.error || "Upload failed.");
         return;
       }
 
-      setSourceMessage(
-        `${files.length} file(s) uploaded successfully.`
-      );
+      const newSources = data.sources || [];
+      const newFiles = data.new_files || [];
+      const duplicates = data.duplicate_files || [];
 
+      setUploadedFiles((previous) => {
+        const map = new Map(previous.map((item) => [item.source_id, item]));
+
+        newSources.forEach((source) => {
+          map.set(source.source_id, source);
+        });
+
+        return [...map.values()];
+      });
+
+      setPendingFiles([]);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+
+      if (newFiles.length && duplicates.length) {
+        setSourceMessage(
+          `${newFiles.length} new file(s) uploaded. ${duplicates.length} duplicate(s) skipped.`
+        );
+      } else if (newFiles.length) {
+        setSourceMessage(`${newFiles.length} new file(s) uploaded successfully.`);
+      } else if (duplicates.length) {
+        setSourceMessage(`${duplicates.length} duplicate file(s) skipped.`);
+      } else {
+        setSourceMessage("No new files were added.");
+      }
     } catch (error) {
-      console.error(
-        "Upload error:",
-        error
-      );
-
-      setSourceMessage(
-        "Could not connect to backend."
-      );
+      console.error("Upload error:", error);
+      setSourceMessage("Could not connect to backend.");
+    } finally {
+      uploadingRef.current = false;
     }
   };
 
-
-  // URL FIELD CHANGE
-
-  const handleUrlChange = (event) => {
-    const newUrl =
-      event.target.value;
-
-    console.log(
-      "URL field changed:",
-      newUrl
-    );
-
-    setUrl(newUrl);
-  };
-
-
-  // URL PASTE
-
-  const handleUrlPaste = (event) => {
-    event.preventDefault();
-
-    const pastedText =
-      event.clipboardData.getData(
-        "text"
-      );
-
-    console.log(
-      "URL pasted:",
-      pastedText
-    );
-
-    setUrl(pastedText);
-
-    setTimeout(() => {
-      if (urlInputRef.current) {
-        urlInputRef.current.focus();
-
-        const length =
-          pastedText.length;
-
-        urlInputRef.current.setSelectionRange(
-          length,
-          length
-        );
-      }
-    }, 0);
-  };
-
-
-  // ADD ONE URL
+  // ==========================================================
+  // ADD URL
+  // ==========================================================
 
   const addUrl = async () => {
-    const trimmedUrl =
-      url.trim();
+    const trimmed = url.trim();
 
-    console.log(
-      "Upload URL clicked:",
-      trimmedUrl
-    );
-
-    if (!trimmedUrl) {
-      setSourceMessage(
-        "Please paste a URL first."
-      );
-
+    if (!trimmed) {
+      setSourceMessage("Please enter a URL first.");
       return;
     }
 
-    if (
-      urls.includes(trimmedUrl)
-    ) {
-      setSourceMessage(
-        "This URL has already been added."
-      );
+    const normalized = trimmed.replace(/\/+$/, "").toLowerCase();
 
+    const alreadyAdded = urls.some(
+      (item) => item.replace(/\/+$/, "").toLowerCase() === normalized
+    );
+
+    if (alreadyAdded) {
+      setSourceMessage("This URL has already been added.");
       return;
     }
 
     try {
-      setSourceMessage(
-        "Scraping URL..."
-      );
+      setSourceMessage("Scraping URL...");
 
-      const response =
-        await fetch(
-          `${BACKEND_URL}/add-url`,
-          {
-            method: "POST",
+      const response = await fetch(`${BACKEND_URL}/add-url`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-ID": SESSION_ID
+        },
+        body: JSON.stringify({ url: trimmed })
+      });
 
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              "X-Session-ID":
-                SESSION_ID,
-            },
-
-            body: JSON.stringify({
-              url: trimmedUrl,
-            }),
-          }
-        );
-
-      const data =
-        await response.json();
-
-      console.log(
-        "Add URL response:",
-        data
-      );
+      const data = await response.json();
 
       if (!response.ok) {
-        setSourceMessage(
-          data.detail ||
-            data.error ||
-            "URL scraping failed."
-        );
-
+        setSourceMessage(data.detail || data.error || "URL scraping failed.");
         return;
       }
 
-      setUrls(
-        (previousUrls) => [
-          ...previousUrls,
-          trimmedUrl,
-        ]
-      );
+      setUrls((previous) => [...previous, data.source_url || trimmed]);
 
       setUrl("");
-
-      setSourceMessage(
-        "URL scraped successfully."
-      );
+      setSourceMessage("URL scraped successfully.");
 
       setTimeout(() => {
         urlInputRef.current?.focus();
       }, 0);
-
     } catch (error) {
-      console.error(
-        "Add URL error:",
-        error
-      );
-
-      setSourceMessage(
-        "Could not connect to backend."
-      );
+      console.error("URL error:", error);
+      setSourceMessage("Could not connect to backend.");
     }
   };
 
+  // ==========================================================
+  // REMOVE FILE
+  // ==========================================================
 
-  // REMOVE URL
+  const removeUploadedFile = async (file) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/remove-source`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-ID": SESSION_ID
+        },
+        body: JSON.stringify({
+          source_type: file.source_type,
+          source_name: file.source_name
+        })
+      });
 
-  const removeUrl = (
-    urlToRemove
-  ) => {
-    setUrls(
-      (previousUrls) =>
-        previousUrls.filter(
-          (item) =>
-            item !== urlToRemove
-        )
-    );
+      const data = await response.json();
 
-    setSourceMessage(
-      "URL removed."
-    );
-  };
-
-
-  // PROCESS SOURCES
-
-  const processSources =
-    async () => {
-      try {
-        setSourceMessage(
-          "Processing sources..."
-        );
-
-        const response =
-          await fetch(
-            `${BACKEND_URL}/process`,
-            {
-              method: "POST",
-
-              headers: {
-                "X-Session-ID":
-                  SESSION_ID,
-              },
-            }
-          );
-
-        const data =
-          await response.json();
-
-        console.log(
-          "Process response:",
-          data
-        );
-
-        if (!response.ok) {
-          setSourceMessage(
-            data.detail ||
-              data.error ||
-              "Processing failed."
-          );
-
-          return;
-        }
-
-        setSourceMessage(
-          `Processed ${data.files_processed} file(s), ` +
-          `${data.urls_processed} URL(s), ` +
-          `${data.chunks_stored} chunks.`
-        );
-
-      } catch (error) {
-        console.error(
-          "Process error:",
-          error
-        );
-
-        setSourceMessage(
-          "Could not connect to backend."
-        );
-      }
-    };
-
-
-  // TEXT TO SPEECH
-
-  const speakAnswer =
-    async (text) => {
-      if (
-        !text ||
-        !text.trim()
-      ) {
+      if (!response.ok) {
+        setSourceMessage(data.detail || "Could not remove the file.");
         return;
       }
 
-      try {
-        stopSpeaking();
+      setUploadedFiles((previous) =>
+        previous.filter((item) => item.source_id !== file.source_id)
+      );
 
-        setVoiceStatus(
-          "Generating voice answer..."
+      setSourceMessage("File removed from the current session.");
+    } catch (error) {
+      console.error("Remove file error:", error);
+      setSourceMessage("Could not connect to backend.");
+    }
+  };
+
+  // ==========================================================
+  // REMOVE URL
+  // ==========================================================
+
+  const removeUrl = async (urlToRemove) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/remove-source`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-ID": SESSION_ID
+        },
+        body: JSON.stringify({
+          source_type: "url",
+          source_name: urlToRemove
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setSourceMessage(data.detail || "Could not remove the URL.");
+        return;
+      }
+
+      setUrls((previous) =>
+        previous.filter((item) => item !== urlToRemove)
+      );
+
+      setSourceMessage("URL removed from the current session.");
+    } catch (error) {
+      console.error("Remove URL error:", error);
+      setSourceMessage("Could not connect to backend.");
+    }
+  };
+
+  // ==========================================================
+  // PROCESS SOURCES
+  // ==========================================================
+
+  const processSources = async () => {
+    if (processingRef.current) return;
+
+    if (!uploadedFiles.length && !urls.length) {
+      setSourceMessage("No uploaded files or URLs are available in this session.");
+      return;
+    }
+
+    processingRef.current = true;
+
+    try {
+      setSourceMessage("Processing new sources...");
+
+      const response = await fetch(`${BACKEND_URL}/process`, {
+        method: "POST",
+        headers: { "X-Session-ID": SESSION_ID }
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setSourceMessage(data.detail || data.error || "Processing failed.");
+        return;
+      }
+
+      const filesProcessed = data.files_processed || 0;
+      const urlsProcessed = data.urls_processed || 0;
+      const chunksStored = data.chunks_stored || 0;
+
+      if (filesProcessed === 0 && urlsProcessed === 0) {
+        setSourceMessage("No new files or URLs to process.");
+      } else {
+        setSourceMessage(
+          `Processed ${filesProcessed} file(s), ${urlsProcessed} URL(s), ${chunksStored} chunks.`
         );
+      }
+    } catch (error) {
+      console.error("Process error:", error);
+      setSourceMessage("Could not connect to backend.");
+    } finally {
+      processingRef.current = false;
+    }
+  };
 
-        const response =
-          await fetch(
-            `${BACKEND_URL}/tts`,
-            {
-              method: "POST",
+  // ==========================================================
+  // TTS
+  // ==========================================================
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
+  const speakAnswer = async (text) => {
+    if (!text?.trim()) return;
 
-              body: JSON.stringify({
-                text,
-              }),
-            }
-          );
+    try {
+      stopSpeaking();
+      setVoiceStatus("Generating voice answer...");
 
-        if (!response.ok) {
-          console.error(
-            "TTS error:",
-            await response.text()
-          );
+      const response = await fetch(`${BACKEND_URL}/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
 
-          setVoiceStatus(
-            "Answer generated, but voice generation failed."
-          );
+      if (!response.ok) {
+        setVoiceStatus("Answer generated, but voice generation failed.");
+        return;
+      }
 
-          return;
+      const blob = await response.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+
+      ttsAudioRef.current = audio;
+
+      audio.onplay = () => {
+        setVoiceStatus("🔊 Speaking...");
+      };
+
+      audio.onended = () => {
+        setVoiceStatus("Click the microphone and ask your next question.");
+        ttsAudioRef.current = null;
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      audio.onerror = () => {
+        setVoiceStatus("Answer generated, but audio playback failed.");
+        ttsAudioRef.current = null;
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      await audio.play();
+    } catch (error) {
+      console.error("TTS error:", error);
+      setVoiceStatus("Answer generated, but voice playback failed.");
+    }
+  };
+
+  // ==========================================================
+  // ASK QUESTION
+  // ==========================================================
+
+  const askQuestion = async (question) => {
+    if (!question?.trim()) {
+      setVoiceStatus("I could not understand the question. Please try again.");
+      return;
+    }
+
+    stopSpeaking();
+    setVoiceStatus("Thinking...");
+
+    try {
+      const conversationHistory = conversation.map((message) => ({
+        role: message.role,
+        content: message.text
+      }));
+
+      const response = await fetch(`${BACKEND_URL}/ask`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-ID": SESSION_ID
+        },
+        body: JSON.stringify({
+          question,
+          conversation_history: conversationHistory
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setVoiceStatus(
+          data.detail || data.error || "Could not generate an answer."
+        );
+        return;
+      }
+
+      const answer = data.answer || "";
+      const sources = data.sources || [];
+
+      setConversation((previous) => [
+        ...previous,
+        { role: "user", text: question },
+        {
+          role: "assistant",
+          text: answer,
+          sources
         }
+      ]);
 
-        const audioBlob =
-          await response.blob();
+      if (answer.trim()) {
+        await speakAnswer(answer);
+      } else {
+        setVoiceStatus("No answer was generated.");
+      }
+    } catch (error) {
+      console.error("Ask error:", error);
+      setVoiceStatus("Could not connect to the backend.");
+    }
+  };
 
-        const audioUrl =
-          URL.createObjectURL(
-            audioBlob
-          );
+  // ==========================================================
+  // AUDIO HELPERS
+  // ==========================================================
 
-        const audio =
-          new Audio(audioUrl);
+  const floatTo16BitPCM = (float32Array) => {
+    const output = new Int16Array(float32Array.length);
 
-        ttsAudioRef.current =
-          audio;
+    for (let i = 0; i < float32Array.length; i++) {
+      const sample = Math.max(-1, Math.min(1, float32Array[i]));
 
-        audio.onplay = () => {
-          setVoiceStatus(
-            "🔊 Speaking..."
-          );
-        };
+      output[i] =
+        sample < 0
+          ? sample * 0x8000
+          : sample * 0x7fff;
+    }
 
-        audio.onended = () => {
-          setVoiceStatus(
-            "Click the microphone and ask your next question."
-          );
+    return output;
+  };
 
-          ttsAudioRef.current =
-            null;
+  const downsampleAudio = (
+    audioData,
+    inputSampleRate,
+    outputSampleRate
+  ) => {
+    if (outputSampleRate >= inputSampleRate) {
+      return audioData;
+    }
 
-          URL.revokeObjectURL(
-            audioUrl
-          );
-        };
+    const ratio = inputSampleRate / outputSampleRate;
+    const newLength = Math.round(audioData.length / ratio);
+    const result = new Float32Array(newLength);
 
-        audio.onerror = () => {
-          setVoiceStatus(
-            "Answer generated, but audio playback failed."
-          );
+    let outputIndex = 0;
+    let inputIndex = 0;
 
-          ttsAudioRef.current =
-            null;
+    while (outputIndex < result.length) {
+      const nextInputIndex = Math.round((outputIndex + 1) * ratio);
 
-          URL.revokeObjectURL(
-            audioUrl
-          );
-        };
+      let sum = 0;
+      let count = 0;
 
-        await audio.play();
+      for (
+        let i = inputIndex;
+        i < nextInputIndex && i < audioData.length;
+        i++
+      ) {
+        sum += audioData[i];
+        count++;
+      }
 
-      } catch (error) {
-        console.error(
-          "TTS error:",
-          error
-        );
+      result[outputIndex] = count ? sum / count : 0;
+      outputIndex++;
+      inputIndex = nextInputIndex;
+    }
 
-        setVoiceStatus(
-          "Answer generated, but voice playback failed."
-        );
+    return result;
+  };
+
+  const createWavBlob = (audioData, sampleRate) => {
+    const targetSampleRate = 16000;
+    const downsampled = downsampleAudio(
+      audioData,
+      sampleRate,
+      targetSampleRate
+    );
+
+    const pcm = floatTo16BitPCM(downsampled);
+    const buffer = new ArrayBuffer(44 + pcm.length * 2);
+    const view = new DataView(buffer);
+
+    const writeString = (offset, text) => {
+      for (let i = 0; i < text.length; i++) {
+        view.setUint8(offset + i, text.charCodeAt(i));
       }
     };
 
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + pcm.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, targetSampleRate, true);
+    view.setUint32(28, targetSampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, pcm.length * 2, true);
 
-  // ASK RAG QUESTION
+    let offset = 44;
 
-  const askQuestion =
-    async (question) => {
-      if (
-        !question ||
-        !question.trim()
-      ) {
+    for (let i = 0; i < pcm.length; i++) {
+      view.setInt16(offset, pcm[i], true);
+      offset += 2;
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
+  };
+
+  // ==========================================================
+  // TRANSCRIBE
+  // ==========================================================
+
+  const transcribeAudio = async (audioBlob) => {
+    try {
+      setVoiceStatus("Understanding your question...");
+
+      const formData = new FormData();
+
+      formData.append("audio", audioBlob, "recording.wav");
+
+      const response = await fetch(`${BACKEND_URL}/transcribe`, {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setVoiceStatus(
+          data.detail || data.error || "Speech recognition failed."
+        );
+        return;
+      }
+
+      const text = data.text || "";
+
+      if (text.trim()) {
+        await askQuestion(text);
+      } else {
         setVoiceStatus(
           "I could not understand the question. Please try again."
         );
+      }
+    } catch (error) {
+      console.error("Transcription error:", error);
+      setVoiceStatus("Could not connect to speech recognition.");
+    }
+  };
 
-        return;
+  // ==========================================================
+  // FINISH RECORDING
+  // ==========================================================
+
+  const finishRecording = async () => {
+    if (stoppingRef.current) return;
+
+    stoppingRef.current = true;
+    setIsRecording(false);
+
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+
+    if (microphoneSourceRef.current) {
+      microphoneSourceRef.current.disconnect();
+      microphoneSourceRef.current = null;
+    }
+
+    if (silentGainRef.current) {
+      silentGainRef.current.disconnect();
+      silentGainRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        track.stop();
+      });
+
+      streamRef.current = null;
+    }
+
+    const chunks = audioChunksRef.current;
+    audioChunksRef.current = [];
+
+    if (audioContextRef.current) {
+      try {
+        await audioContextRef.current.close();
+      } catch (error) {
+        console.warn(error);
       }
 
+      audioContextRef.current = null;
+    }
+
+    let totalLength = 0;
+
+    chunks.forEach((chunk) => {
+      totalLength += chunk.length;
+    });
+
+    if (!totalLength) {
+      setVoiceStatus("No speech was recorded. Please try again.");
+      stoppingRef.current = false;
+      return;
+    }
+
+    const combined = new Float32Array(totalLength);
+    let offset = 0;
+
+    chunks.forEach((chunk) => {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    });
+
+    const wavBlob = createWavBlob(
+      combined,
+      sampleRateRef.current
+    );
+
+    await transcribeAudio(wavBlob);
+
+    stoppingRef.current = false;
+  };
+
+  // ==========================================================
+  // SILENCE DETECTION
+  // ==========================================================
+
+  const checkSilence = (audioBuffer) => {
+    let sum = 0;
+
+    for (let i = 0; i < audioBuffer.length; i++) {
+      sum += audioBuffer[i] * audioBuffer[i];
+    }
+
+    const rms = Math.sqrt(sum / audioBuffer.length);
+    const SILENCE_THRESHOLD = 0.015;
+
+    if (rms < SILENCE_THRESHOLD) {
+      if (silenceStartRef.current === null) {
+        silenceStartRef.current = Date.now();
+      }
+
+      if (Date.now() - silenceStartRef.current >= 5000) {
+        setVoiceStatus("Silence detected. Processing...");
+        finishRecording();
+        return true;
+      }
+    } else {
+      silenceStartRef.current = null;
+    }
+
+    return false;
+  };
+
+  // ==========================================================
+  // START RECORDING
+  // ==========================================================
+
+  const startRecording = async () => {
+    try {
       stopSpeaking();
 
+      setVoiceStatus("Requesting microphone...");
+      stoppingRef.current = false;
+      silenceStartRef.current = null;
+      audioChunksRef.current = [];
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000
+        }
+      });
+
+      streamRef.current = stream;
+
+      const AudioContext =
+        window.AudioContext ||
+        window.webkitAudioContext;
+
+      if (!AudioContext) {
+        throw new Error("Web Audio API is not supported.");
+      }
+
+      const audioContext = new AudioContext();
+
+      audioContextRef.current = audioContext;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      sampleRateRef.current = audioContext.sampleRate;
+
+      const microphoneSource =
+        audioContext.createMediaStreamSource(stream);
+
+      microphoneSourceRef.current = microphoneSource;
+
+      const processor = audioContext.createScriptProcessor(
+        4096,
+        1,
+        1
+      );
+
+      processorRef.current = processor;
+
+      const silentGain = audioContext.createGain();
+
+      silentGain.gain.value = 0;
+      silentGainRef.current = silentGain;
+
+      processor.onaudioprocess = (event) => {
+        if (stoppingRef.current) return;
+
+        const inputData =
+          event.inputBuffer.getChannelData(0);
+
+        const copy = new Float32Array(inputData.length);
+
+        copy.set(inputData);
+        audioChunksRef.current.push(copy);
+
+        checkSilence(inputData);
+      };
+
+      microphoneSource.connect(processor);
+      processor.connect(silentGain);
+      silentGain.connect(audioContext.destination);
+
+      setIsRecording(true);
+      setVoiceStatus("🎤 Listening... Speak your question.");
+    } catch (error) {
+      console.error("Microphone error:", error);
+
+      setIsRecording(false);
+
       setVoiceStatus(
-        "Thinking..."
+        "Could not access microphone. Please allow microphone permission."
       );
 
-      try {
-        const conversationHistory =
-          conversation.map(
-            (message) => ({
-              role:
-                message.role,
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => {
+          track.stop();
+        });
 
-              content:
-                message.text,
-            })
-          );
-
-        console.log(
-          "Question:",
-          question
-        );
-
-        console.log(
-          "Conversation history:",
-          conversationHistory
-        );
-
-        const response =
-          await fetch(
-            `${BACKEND_URL}/ask`,
-            {
-              method: "POST",
-
-              headers: {
-                "Content-Type":
-                  "application/json",
-
-                "X-Session-ID":
-                  SESSION_ID,
-              },
-
-              body: JSON.stringify({
-                question,
-
-                conversation_history:
-                  conversationHistory,
-              }),
-            }
-          );
-
-        const data =
-          await response.json();
-
-        console.log(
-          "RAG response:",
-          data
-        );
-
-        if (!response.ok) {
-          setVoiceStatus(
-            data.detail ||
-              data.error ||
-              "Could not generate an answer."
-          );
-
-          return;
-        }
-
-        const generatedAnswer =
-          data.answer || "";
-
-        const generatedSources =
-          data.sources || [];
-
-        setConversation(
-          (previousConversation) => [
-            ...previousConversation,
-
-            {
-              role: "user",
-
-              text: question,
-            },
-
-            {
-              role: "assistant",
-
-              text:
-                generatedAnswer,
-
-              sources:
-                generatedSources,
-            },
-          ]
-        );
-
-        if (
-          generatedAnswer.trim()
-        ) {
-          await speakAnswer(
-            generatedAnswer
-          );
-        } else {
-          setVoiceStatus(
-            "No answer was generated."
-          );
-        }
-
-      } catch (error) {
-        console.error(
-          "Ask error:",
-          error
-        );
-
-        setVoiceStatus(
-          "Could not connect to the backend."
-        );
-      }
-    };
-
-
-  // FLOAT32 → 16 BIT PCM
-
-  const floatTo16BitPCM =
-    (float32Array) => {
-      const output =
-        new Int16Array(
-          float32Array.length
-        );
-
-      for (
-        let i = 0;
-        i < float32Array.length;
-        i++
-      ) {
-        const sample =
-          Math.max(
-            -1,
-            Math.min(
-              1,
-              float32Array[i]
-            )
-          );
-
-        if (
-          sample < 0
-        ) {
-          output[i] =
-            sample * 0x8000;
-        } else {
-          output[i] =
-            sample * 0x7fff;
-        }
+        streamRef.current = null;
       }
 
-      return output;
-    };
-
-
-  // DOWNSAMPLE AUDIO
-
-  const downsampleAudio =
-    (
-      audioData,
-      inputSampleRate,
-      outputSampleRate
-    ) => {
-      if (
-        outputSampleRate >=
-        inputSampleRate
-      ) {
-        return audioData;
-      }
-
-      const ratio =
-        inputSampleRate /
-        outputSampleRate;
-
-      const newLength =
-        Math.round(
-          audioData.length /
-            ratio
-        );
-
-      const result =
-        new Float32Array(
-          newLength
-        );
-
-      let offsetResult = 0;
-
-      let offsetBuffer = 0;
-
-      while (
-        offsetResult <
-        result.length
-      ) {
-        const nextOffsetBuffer =
-          Math.round(
-            (offsetResult + 1) *
-              ratio
-          );
-
-        let accum = 0;
-
-        let count = 0;
-
-        for (
-          let i = offsetBuffer;
-
-          i < nextOffsetBuffer &&
-          i < audioData.length;
-
-          i++
-        ) {
-          accum +=
-            audioData[i];
-
-          count++;
-        }
-
-        result[
-          offsetResult
-        ] =
-          count > 0
-            ? accum / count
-            : 0;
-
-        offsetResult++;
-
-        offsetBuffer =
-          nextOffsetBuffer;
-      }
-
-      return result;
-    };
-
-
-  // CREATE WAV
-
-  const createWavBlob =
-    (
-      audioData,
-      sampleRate
-    ) => {
-      const targetSampleRate =
-        16000;
-
-      const downsampled =
-        downsampleAudio(
-          audioData,
-          sampleRate,
-          targetSampleRate
-        );
-
-      const pcmData =
-        floatTo16BitPCM(
-          downsampled
-        );
-
-      const buffer =
-        new ArrayBuffer(
-          44 +
-            pcmData.length * 2
-        );
-
-      const view =
-        new DataView(
-          buffer
-        );
-
-      const writeString =
-        (
-          offset,
-          string
-        ) => {
-          for (
-            let i = 0;
-            i < string.length;
-            i++
-          ) {
-            view.setUint8(
-              offset + i,
-              string.charCodeAt(i)
-            );
-          }
-        };
-
-      writeString(
-        0,
-        "RIFF"
-      );
-
-      view.setUint32(
-        4,
-        36 +
-          pcmData.length * 2,
-        true
-      );
-
-      writeString(
-        8,
-        "WAVE"
-      );
-
-      writeString(
-        12,
-        "fmt "
-      );
-
-      view.setUint32(
-        16,
-        16,
-        true
-      );
-
-      view.setUint16(
-        20,
-        1,
-        true
-      );
-
-      view.setUint16(
-        22,
-        1,
-        true
-      );
-
-      view.setUint32(
-        24,
-        targetSampleRate,
-        true
-      );
-
-      view.setUint32(
-        28,
-        targetSampleRate * 2,
-        true
-      );
-
-      view.setUint16(
-        32,
-        2,
-        true
-      );
-
-      view.setUint16(
-        34,
-        16,
-        true
-      );
-
-      writeString(
-        36,
-        "data"
-      );
-
-      view.setUint32(
-        40,
-        pcmData.length * 2,
-        true
-      );
-
-      let offset = 44;
-
-      for (
-        let i = 0;
-        i < pcmData.length;
-        i++
-      ) {
-        view.setInt16(
-          offset,
-          pcmData[i],
-          true
-        );
-
-        offset += 2;
-      }
-
-      return new Blob(
-        [buffer],
-        {
-          type: "audio/wav",
-        }
-      );
-    };
-
-
-  // TRANSCRIBE AUDIO
-
-  const transcribeAudio =
-    async (audioBlob) => {
-      try {
-        setVoiceStatus(
-          "Understanding your question..."
-        );
-
-        const formData =
-          new FormData();
-
-        formData.append(
-          "audio",
-          audioBlob,
-          "recording.wav"
-        );
-
-        const response =
-          await fetch(
-            `${BACKEND_URL}/transcribe`,
-            {
-              method: "POST",
-
-              body: formData,
-            }
-          );
-
-        const data =
-          await response.json();
-
-        console.log(
-          "Transcription response:",
-          data
-        );
-
-        if (!response.ok) {
-          setVoiceStatus(
-            data.detail ||
-              data.error ||
-              "Speech recognition failed."
-          );
-
-          return;
-        }
-
-        const recognizedText =
-          data.text || "";
-
-        console.log(
-          "Recognized question:",
-          recognizedText
-        );
-
-        if (
-          recognizedText.trim()
-        ) {
-          await askQuestion(
-            recognizedText
-          );
-        } else {
-          setVoiceStatus(
-            "I could not understand the question. Please try again."
-          );
-        }
-
-      } catch (error) {
-        console.error(
-          "Transcription error:",
-          error
-        );
-
-        setVoiceStatus(
-          "Could not connect to speech recognition."
-        );
-      }
-    };
-
-
-  // FINISH RECORDING
-
-  const finishRecording =
-    async () => {
-      if (
-        stoppingRef.current
-      ) {
-        return;
-      }
-
-      stoppingRef.current =
-        true;
-
-      setIsRecording(
-        false
-      );
-
-      if (
-        processorRef.current
-      ) {
-        processorRef.current
-          .disconnect();
-
-        processorRef.current =
-          null;
-      }
-
-      if (
-        microphoneSourceRef.current
-      ) {
-        microphoneSourceRef.current
-          .disconnect();
-
-        microphoneSourceRef.current =
-          null;
-      }
-
-      if (
-        silentGainRef.current
-      ) {
-        silentGainRef.current
-          .disconnect();
-
-        silentGainRef.current =
-          null;
-      }
-
-      if (
-        streamRef.current
-      ) {
-        streamRef.current
-          .getTracks()
-          .forEach(
-            (track) => {
-              track.stop();
-            }
-          );
-
-        streamRef.current =
-          null;
-      }
-
-      const chunks =
-        audioChunksRef.current;
-
-      audioChunksRef.current =
-        [];
-
-      let totalLength = 0;
-
-      chunks.forEach(
-        (chunk) => {
-          totalLength +=
-            chunk.length;
-        }
-      );
-
-      if (
-        totalLength === 0
-      ) {
-        setVoiceStatus(
-          "No speech was recorded. Please try again."
-        );
-
-        if (
-          audioContextRef.current
-        ) {
-          try {
-            await audioContextRef.current.close();
-          } catch (error) {
-            console.warn(error);
-          }
-
-          audioContextRef.current =
-            null;
-        }
-
-        stoppingRef.current =
-          false;
-
-        return;
-      }
-
-      const combinedAudio =
-        new Float32Array(
-          totalLength
-        );
-
-      let offset = 0;
-
-      chunks.forEach(
-        (chunk) => {
-          combinedAudio.set(
-            chunk,
-            offset
-          );
-
-          offset +=
-            chunk.length;
-        }
-      );
-
-      const wavBlob =
-        createWavBlob(
-          combinedAudio,
-          sampleRateRef.current
-        );
-
-      if (
-        audioContextRef.current
-      ) {
+      if (audioContextRef.current) {
         try {
           await audioContextRef.current.close();
-        } catch (error) {
-          console.warn(error);
+        } catch (closeError) {
+          console.warn(closeError);
         }
 
-        audioContextRef.current =
-          null;
+        audioContextRef.current = null;
       }
-
-      await transcribeAudio(
-        wavBlob
-      );
-
-      stoppingRef.current =
-        false;
-    };
-
-
-  // SILENCE DETECTION
-
-  const checkSilence =
-    (audioBuffer) => {
-      let sum = 0;
-
-      for (
-        let i = 0;
-        i < audioBuffer.length;
-        i++
-      ) {
-        const sample =
-          audioBuffer[i];
-
-        sum +=
-          sample * sample;
-      }
-
-      const rms =
-        Math.sqrt(
-          sum /
-            audioBuffer.length
-        );
-
-      const SILENCE_THRESHOLD =
-        0.015;
-
-      if (
-        rms <
-        SILENCE_THRESHOLD
-      ) {
-        if (
-          silenceStartRef.current ===
-          null
-        ) {
-          silenceStartRef.current =
-            Date.now();
-
-          console.log(
-            "Silence started..."
-          );
-        }
-
-        const silenceDuration =
-          Date.now() -
-          silenceStartRef.current;
-
-        const silenceSeconds =
-          Math.floor(
-            silenceDuration /
-              1000
-          );
-
-        console.log(
-          `Silence duration: ${silenceSeconds} seconds`
-        );
-
-        if (
-          silenceDuration >=
-          5000
-        ) {
-          console.log(
-            "5 seconds of silence detected."
-          );
-
-          setVoiceStatus(
-            "Silence detected. Processing..."
-          );
-
-          finishRecording();
-
-          return true;
-        }
-
-      } else {
-        silenceStartRef.current =
-          null;
-      }
-
-      return false;
-    };
-
-
-  // START RECORDING
-
-  const startRecording =
-    async () => {
-      try {
-        stopSpeaking();
-
-        setVoiceStatus(
-          "Requesting microphone..."
-        );
-
-        stoppingRef.current =
-          false;
-
-        silenceStartRef.current =
-          null;
-
-        audioChunksRef.current =
-          [];
-
-        const stream =
-          await navigator.mediaDevices
-            .getUserMedia({
-              audio: {
-                channelCount: 1,
-
-                echoCancellation:
-                  true,
-
-                noiseSuppression:
-                  true,
-
-                autoGainControl:
-                  true,
-
-                sampleRate: 48000,
-              },
-            });
-
-        streamRef.current =
-          stream;
-
-        const AudioContext =
-          window.AudioContext ||
-          window.webkitAudioContext;
-
-        if (!AudioContext) {
-          throw new Error(
-            "Web Audio API is not supported."
-          );
-        }
-
-        const audioContext =
-          new AudioContext();
-
-        audioContextRef.current =
-          audioContext;
-
-        if (
-          audioContext.state ===
-          "suspended"
-        ) {
-          await audioContext.resume();
-        }
-
-        sampleRateRef.current =
-          audioContext.sampleRate;
-
-        const microphoneSource =
-          audioContext
-            .createMediaStreamSource(
-              stream
-            );
-
-        microphoneSourceRef.current =
-          microphoneSource;
-
-        const processor =
-          audioContext
-            .createScriptProcessor(
-              4096,
-              1,
-              1
-            );
-
-        processorRef.current =
-          processor;
-
-        const silentGain =
-          audioContext.createGain();
-
-        silentGain.gain.value =
-          0;
-
-        silentGainRef.current =
-          silentGain;
-
-        processor.onaudioprocess =
-          (event) => {
-            if (
-              stoppingRef.current
-            ) {
-              return;
-            }
-
-            const inputData =
-              event.inputBuffer
-                .getChannelData(
-                  0
-                );
-
-            const audioCopy =
-              new Float32Array(
-                inputData.length
-              );
-
-            audioCopy.set(
-              inputData
-            );
-
-            audioChunksRef.current.push(
-              audioCopy
-            );
-
-            checkSilence(
-              inputData
-            );
-          };
-
-        microphoneSource.connect(
-          processor
-        );
-
-        processor.connect(
-          silentGain
-        );
-
-        silentGain.connect(
-          audioContext.destination
-        );
-
-        setIsRecording(
-          true
-        );
-
-        setVoiceStatus(
-          "🎤 Listening... Speak your question."
-        );
-
-        console.log(
-          "Microphone access granted."
-        );
-
-        console.log(
-          "Recording started."
-        );
-
-      } catch (error) {
-        console.error(
-          "Microphone error:",
-          error
-        );
-
-        setIsRecording(
-          false
-        );
-
-        setVoiceStatus(
-          "Could not access microphone. Please allow microphone permission."
-        );
-
-        if (
-          streamRef.current
-        ) {
-          streamRef.current
-            .getTracks()
-            .forEach(
-              (track) => {
-                track.stop();
-              }
-            );
-
-          streamRef.current =
-            null;
-        }
-
-        if (
-          audioContextRef.current
-        ) {
-          try {
-            await audioContextRef.current.close();
-          } catch (closeError) {
-            console.warn(
-              closeError
-            );
-          }
-
-          audioContextRef.current =
-            null;
-        }
-      }
-    };
-
-
-  // MANUAL STOP
-
-  const stopRecording =
-    () => {
-      silenceStartRef.current =
-        null;
-
-      finishRecording();
-    };
-
-
+    }
+  };
+
+  const stopRecording = () => {
+    silenceStartRef.current = null;
+    finishRecording();
+  };
+
+  // ==========================================================
   // UI
+  // ==========================================================
 
   return (
     <div className="app">
-
       <aside className="sidebar">
-
         <div className="sidebar-header">
-
-          <h2>
-            🎙️ QUIRRI RAG
-          </h2>
-
-          <p>
-            Knowledge Sources
-          </p>
-
+          <h2>🎙️ QUIRRI RAG</h2>
+          <p>Knowledge Sources</p>
         </div>
 
-
         <div className="source-section">
-
-          <h3>
-            📄 Upload Files
-          </h3>
+          <h3>📄 Upload Files</h3>
 
           <label className="file-input">
-
             Choose Files
-
             <input
               ref={fileInputRef}
-
               type="file"
-
               multiple
-
               accept=".pdf,.txt,.pptx"
-
-              onChange={
-                handleFileSelection
-              }
+              onChange={handleFileSelection}
             />
-
           </label>
 
-
-          {files.length > 0 && (
-
+          {pendingFiles.length > 0 && (
             <div className="selected-files">
+              <div className="list-title">Selected Files</div>
 
-              <div className="list-title">
-                Selected Files
-              </div>
+              {pendingFiles.map((file) => (
+                <div
+                  className="file-item"
+                  key={getFileKey(file)}
+                >
+                  <span className="file-icon">📄</span>
 
-              {files.map(
-                (file, index) => (
+                  <span className="file-name">
+                    {file.name}
+                  </span>
 
-                  <div
-                    className="file-item"
-
-                    key={
-                      `${file.name}-${index}`
-                    }
+                  <button
+                    type="button"
+                    className="remove-button"
+                    onClick={() => removePendingFile(file)}
                   >
-
-                    <span className="file-icon">
-                      📄
-                    </span>
-
-                    <span className="file-name">
-                      {file.name}
-                    </span>
-
-                    <button
-                      type="button"
-
-                      className="remove-button"
-
-                      onClick={() =>
-                        removeFile(
-                          file.name
-                        )
-                      }
-
-                      title="Remove file"
-                    >
-                      ×
-                    </button>
-
-                  </div>
-                )
-              )}
-
+                    ×
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
+          {uploadedFiles.length > 0 && (
+            <div className="selected-files">
+              <div className="list-title">Uploaded Files</div>
+
+              {uploadedFiles.map((file) => (
+                <div
+                  className="file-item"
+                  key={file.source_id}
+                >
+                  <span className="file-icon">📄</span>
+
+                  <span className="file-name">
+                    {file.source_name}
+                  </span>
+
+                  <button
+                    type="button"
+                    className="remove-button"
+                    onClick={() =>
+                      removeUploadedFile(file)
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           <button
             type="button"
-
             className="sidebar-button"
-
-            onClick={
-              uploadFiles
-            }
+            onClick={uploadFiles}
           >
             Upload Files
           </button>
-
         </div>
 
-
         <div className="source-section">
-
-          <h3>
-            🔗 Add Website
-          </h3>
+          <h3>🔗 Add Website</h3>
 
           <input
             ref={urlInputRef}
-
             className="url-input"
-
             type="text"
-
             placeholder="Paste website URL"
-
             value={url}
-
-            onChange={
-              handleUrlChange
+            onChange={(event) =>
+              setUrl(event.target.value)
             }
-
-            onPaste={
-              handleUrlPaste
-            }
-
             onKeyDown={(event) => {
-              if (
-                event.key ===
-                "Enter"
-              ) {
+              if (event.key === "Enter") {
                 event.preventDefault();
-
                 addUrl();
               }
             }}
-
             autoComplete="off"
-
             spellCheck="false"
-
-            style={{
-              width: "100%",
-
-              boxSizing:
-                "border-box",
-
-              backgroundColor:
-                "#ffffff",
-
-              color:
-                "#111827",
-
-              WebkitTextFillColor:
-                "#111827",
-
-              fontSize:
-                "13px",
-
-              padding:
-                "10px 11px",
-
-              border:
-                "1px solid #d1d5db",
-
-              borderRadius:
-                "8px",
-
-              outline:
-                "none",
-
-              opacity: 1,
-            }}
           />
-
 
           <button
             type="button"
-
             className="sidebar-button"
-
-            onClick={
-              addUrl
-            }
+            onClick={addUrl}
           >
             Add URL
           </button>
 
-
           {urls.length > 0 && (
-
             <div className="selected-files">
-
               <div className="list-title">
                 Added Websites
               </div>
 
-              {urls.map(
-                (item, index) => (
+              {urls.map((item) => (
+                <div
+                  className="file-item"
+                  key={item}
+                >
+                  <span className="file-icon">🔗</span>
 
-                  <div
-                    className="file-item"
+                  <span className="file-name">
+                    {item}
+                  </span>
 
-                    key={
-                      `${item}-${index}`
-                    }
+                  <button
+                    type="button"
+                    className="remove-button"
+                    onClick={() => removeUrl(item)}
                   >
-
-                    <span className="file-icon">
-                      🔗
-                    </span>
-
-                    <span className="file-name">
-                      {item}
-                    </span>
-
-                    <button
-                      type="button"
-
-                      className="remove-button"
-
-                      onClick={() =>
-                        removeUrl(
-                          item
-                        )
-                      }
-
-                      title="Remove URL"
-                    >
-                      ×
-                    </button>
-
-                  </div>
-                )
-              )}
-
+                    ×
+                  </button>
+                </div>
+              ))}
             </div>
           )}
-
         </div>
 
-
         <div className="source-section">
-
           <button
             type="button"
-
             className="process-button"
-
-            onClick={
-              processSources
-            }
+            onClick={processSources}
           >
             ⚙️ Process Sources
           </button>
-
         </div>
 
-
         {sourceMessage && (
-
           <div className="source-message">
             {sourceMessage}
           </div>
         )}
 
-
         <div className="sidebar-footer">
           Voice-only interaction
         </div>
-
       </aside>
 
-
       <main className="main">
-
         <header className="chat-header">
-
           <div>
-
-            <h1>
-              QUIRRI RAG Assistant
-            </h1>
-
+            <h1>QUIRRI RAG Assistant</h1>
             <p>
               Ask questions about your knowledge sources
             </p>
-
           </div>
-
 
           <div className="status-indicator">
-
             <span className="status-dot"></span>
-
             Ready
-
           </div>
-
         </header>
 
-
         <section className="chat-area">
-
           {conversation.length === 0 ? (
-
             <div className="welcome">
+              <div className="welcome-icon">🎙️</div>
 
-              <div className="welcome-icon">
-                🎙️
-              </div>
-
-              <h2>
-                How can I help you?
-              </h2>
+              <h2>How can I help you?</h2>
 
               <p>
-                Upload your documents or add
-                websites from the sidebar,
-                then ask your question using
-                your voice.
+                Upload your documents or add websites
+                from the sidebar, then ask your question
+                using your voice.
               </p>
 
               <div className="welcome-examples">
-
+                <div>“What is Python?”</div>
                 <div>
-                  “What is Python?”
+                  “What are the data types in Python?”
                 </div>
-
-                <div>
-                  “What are the Data types in Python?”
-                </div>
-
               </div>
-
             </div>
-
           ) : (
-
             <div className="messages">
-
-              {conversation.map(
-                (message, index) => (
-
-                  <div
-                    key={index}
-
-                    className={
-                      message.role ===
-                      "user"
-                        ? "message user-message"
-                        : "message assistant-message"
-                    }
-                  >
-
-                    <div className="message-avatar">
-
-                      {message.role ===
-                      "user"
-                        ? "👤"
-                        : "🤖"}
-
-                    </div>
-
-
-                    <div className="message-content">
-
-                      <div className="message-role">
-
-                        {message.role ===
-                        "user"
-                          ? "You"
-                          : "Assistant"}
-
-                      </div>
-
-
-                      <div className="message-text">
-
-                        {message.text}
-
-                      </div>
-
-
-                      {message.role ===
-                        "assistant" &&
-                        message.sources &&
-                        message.sources.length >
-                          0 && (
-
-                          <div className="message-sources">
-
-                            <div className="sources-title">
-                              Sources
-                            </div>
-
-                            {message.sources.map(
-                              (
-                                source,
-                                sourceIndex
-                              ) => (
-
-                                <div
-                                  className="source-item"
-
-                                  key={
-                                    sourceIndex
-                                  }
-                                >
-
-                                  <span>
-                                    📄
-                                  </span>
-
-                                  <span>
-                                    {
-                                      source.source_name
-                                    }
-                                  </span>
-
-                                </div>
-                              )
-                            )}
-
-                          </div>
-                        )}
-
-                    </div>
-
+              {conversation.map((message, index) => (
+                <div
+                  key={index}
+                  className={
+                    message.role === "user"
+                      ? "message user-message"
+                      : "message assistant-message"
+                  }
+                >
+                  <div className="message-avatar">
+                    {message.role === "user"
+                      ? "👤"
+                      : "🤖"}
                   </div>
-                )
-              )}
 
+                  <div className="message-content">
+                    <div className="message-role">
+                      {message.role === "user"
+                        ? "You"
+                        : "Assistant"}
+                    </div>
 
-              <div
-                ref={chatEndRef}
-              />
+                    <div className="message-text">
+                      {message.text}
+                    </div>
 
+                    {message.role === "assistant" &&
+                      message.sources?.length > 0 && (
+                        <div className="message-sources">
+                          <div className="sources-title">
+                            Sources
+                          </div>
+
+                          {message.sources.map(
+                            (source, sourceIndex) => (
+                              <div
+                                className="source-item"
+                                key={sourceIndex}
+                              >
+                                <span>📄</span>
+                                <span>
+                                  {source.source_name}
+                                </span>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
+                  </div>
+                </div>
+              ))}
+
+              <div ref={chatEndRef}></div>
             </div>
           )}
-
         </section>
 
-
-        <section className="voice-area">
-
+        <div className="voice-area">
           <div className="voice-status">
             {voiceStatus}
           </div>
 
-
           <button
             type="button"
-
             className={
               isRecording
-                ? "mic-button recording"
-                : "mic-button"
+                ? "microphone-button recording"
+                : "microphone-button"
             }
-
             onClick={
               isRecording
                 ? stopRecording
                 : startRecording
             }
-
-            aria-label={
-              isRecording
-                ? "Stop recording"
-                : "Start recording"
-            }
           >
-
-            {isRecording
-              ? "⏹"
-              : "🎙️"}
-
+            {isRecording ? "⏹️" : "🎙️"}
           </button>
 
-
-          <div className="voice-label">
-
+          <div className="voice-help">
             {isRecording
-              ? "Listening..."
-              : "Ask a question"}
-
+              ? "Speak your question. Recording stops after 5 seconds of silence."
+              : "Click the microphone to ask a question by voice."}
           </div>
-
-
-          {!isRecording && (
-
-            <div className="voice-hint">
-
-              Speak naturally. Recording
-              stops after 5 seconds of silence.
-
-            </div>
-
-          )}
-
-        </section>
-
+        </div>
       </main>
-
     </div>
   );
 }

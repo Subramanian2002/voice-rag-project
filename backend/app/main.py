@@ -1,52 +1,20 @@
+import hashlib
 import os
 import tempfile
 import uuid
-import hashlib
 
 from dotenv import load_dotenv
+from fastapi import FastAPI, UploadFile, File, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
-from fastapi import (
-    FastAPI,
-    UploadFile,
-    File,
-    HTTPException,
-    Header
-)
-
-from pydantic import (
-    BaseModel,
-    Field
-)
-
-from fastapi.middleware.cors import (
-    CORSMiddleware
-)
-
-from fastapi.responses import (
-    FileResponse
-)
-
-from app.scraper import (
-    scrape_url
-)
-
-from app.sources import (
-    uploaded_sources,
-    url_sources
-)
-
-from app.processor import (
-    process_all_sources,
-    answer_question
-)
-
-from app.speech import (
-    transcribe_audio
-)
-
-from app.tts import (
-    generate_speech
-)
+from app.scraper import scrape_url
+from app.sources import uploaded_sources, url_sources
+from app.processor import process_all_sources, answer_question
+from app.speech import transcribe_audio
+from app.tts import generate_speech
+from app.qdrant_db import create_collection, delete_source_vectors
 
 
 # ============================================================
@@ -70,22 +38,13 @@ app = FastAPI(
 # CORS
 # ============================================================
 
-FRONTEND_URL = os.getenv(
-    "FRONTEND_URL",
-    "http://localhost:5173"
-)
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-ALLOWED_ORIGINS = [
+ALLOWED_ORIGINS = list(dict.fromkeys([
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     FRONTEND_URL
-]
-
-ALLOWED_ORIGINS = list(
-    dict.fromkeys(
-        ALLOWED_ORIGINS
-    )
-)
+]))
 
 app.add_middleware(
     CORSMiddleware,
@@ -97,24 +56,23 @@ app.add_middleware(
 
 
 # ============================================================
+# QDRANT STARTUP
+# ============================================================
+
+@app.on_event("startup")
+def initialize_qdrant():
+    create_collection()
+
+
+# ============================================================
 # UPLOAD CONFIGURATION
 # ============================================================
 
-BASE_DIR = os.path.dirname(
-    os.path.dirname(
-        os.path.abspath(__file__)
-    )
-)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-UPLOAD_DIR = os.path.join(
-    BASE_DIR,
-    "uploads"
-)
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 
-os.makedirs(
-    UPLOAD_DIR,
-    exist_ok=True
-)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
     ".pdf",
@@ -127,34 +85,22 @@ ALLOWED_EXTENSIONS = {
 # SESSION VALIDATION
 # ============================================================
 
-def validate_session_id(
-    session_id: str
-) -> str:
-
+def validate_session_id(session_id: str) -> str:
     if session_id is None:
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "X-Session-ID header "
-                "is required."
-            )
+            detail="X-Session-ID header is required."
         )
 
     session_id = session_id.strip()
 
     if not session_id:
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Session ID cannot "
-                "be empty."
-            )
+            detail="Session ID cannot be empty."
         )
 
     if len(session_id) > 200:
-
         raise HTTPException(
             status_code=400,
             detail="Invalid session ID."
@@ -164,15 +110,24 @@ def validate_session_id(
 
 
 # ============================================================
+# SOURCE ID
+# ============================================================
+
+def make_source_id(value: str) -> str:
+    normalized = str(value or "").strip().rstrip("/").lower()
+
+    return hashlib.sha256(
+        normalized.encode("utf-8")
+    ).hexdigest()
+
+
+# ============================================================
 # HEALTH CHECK
 # ============================================================
 
 @app.get("/health")
 def health_check():
-
-    return {
-        "status": "healthy"
-    }
+    return {"status": "healthy"}
 
 
 # ============================================================
@@ -181,13 +136,9 @@ def health_check():
 
 @app.get("/")
 def root():
-
     return {
-        "message":
-            "QUiRRI RAG API is running",
-
-        "status":
-            "healthy"
+        "message": "QUiRRI RAG API is running",
+        "status": "healthy"
     }
 
 
@@ -197,233 +148,135 @@ def root():
 
 @app.post("/upload")
 async def upload_files(
-
     files: list[UploadFile] = File(...),
-
-    session_id: str = Header(
-        ...,
-        alias="X-Session-ID"
-    )
+    session_id: str = Header(..., alias="X-Session-ID")
 ):
-
-    session_id = validate_session_id(
-        session_id
-    )
+    session_id = validate_session_id(session_id)
 
     if not files:
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Please select at least "
-                "one file."
-            )
+            detail="Please select at least one file."
         )
 
-    if session_id not in uploaded_sources:
+    # Only sources belonging to the current browser session.
+    session_sources = uploaded_sources.setdefault(session_id, [])
 
-        uploaded_sources[
-            session_id
-        ] = []
-
-    uploaded_files = []
+    new_files = []
+    duplicate_files = []
+    source_details = []
 
     for file in files:
-
         if not file.filename:
+            raise HTTPException(
+                status_code=400,
+                detail="File name is missing."
+            )
 
+        original_filename = os.path.basename(file.filename)
+
+        file_extension = os.path.splitext(original_filename)[1].lower()
+
+        if file_extension not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "File name is missing."
+                    f"Unsupported file type: {original_filename}. "
+                    "Supported types: PDF, TXT and PPTX."
                 )
             )
-
-        original_filename = os.path.basename(
-            file.filename
-        )
-
-        file_extension = os.path.splitext(
-            original_filename
-        )[1].lower()
-
-        if (
-            file_extension
-            not in ALLOWED_EXTENSIONS
-        ):
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Unsupported file type: "
-                    f"{original_filename}. "
-                    f"Supported types: "
-                    f"PDF, TXT and PPTX."
-                )
-            )
-
-        safe_filename = (
-            f"{uuid.uuid4().hex}_"
-            f"{original_filename}"
-        )
-
-        file_path = os.path.join(
-            UPLOAD_DIR,
-            safe_filename
-        )
 
         try:
-
-            file_content = (
-                await file.read()
-            )
+            file_content = await file.read()
 
             if not file_content:
-
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"File is empty: "
-                        f"{original_filename}"
-                    )
+                    detail=f"File is empty: {original_filename}"
                 )
 
-            # Create a content hash so the same file cannot be
-            # uploaded repeatedly into the same browser session.
-            file_hash = hashlib.sha256(
-                file_content
-            ).hexdigest()
+            # SHA-256 identifies the actual file contents.
+            file_hash = hashlib.sha256(file_content).hexdigest()
 
-            duplicate_source = None
+            # Check duplicate only inside the current session.
+            duplicate = any(
+                source.get("source_id") == file_hash
+                or source.get("file_hash") == file_hash
+                for source in session_sources
+            )
 
-            for existing_source in uploaded_sources[
-                session_id
-            ]:
-
-                existing_hash = existing_source.get(
-                    "file_hash"
-                )
-
-                # Newer entries contain file_hash.
-                if existing_hash == file_hash:
-
-                    duplicate_source = existing_source
-                    break
-
-                # Older entries may not contain file_hash.
-                # Compare their stored file contents when possible.
-                existing_path = existing_source.get(
-                    "file_path"
-                )
-
-                if (
-                    not existing_hash
-                    and existing_path
-                    and os.path.exists(existing_path)
-                ):
-
-                    try:
-
-                        with open(
-                            existing_path,
-                            "rb"
-                        ) as existing_file:
-
-                            existing_hash = hashlib.sha256(
-                                existing_file.read()
-                            ).hexdigest()
-
-                        if existing_hash == file_hash:
-
-                            duplicate_source = existing_source
-                            break
-
-                    except Exception:
-
-                        pass
-
-            if duplicate_source:
-
-                uploaded_files.append(
-                    original_filename
-                )
+            if duplicate:
+                duplicate_files.append(original_filename)
 
                 print(
-                    f"Duplicate file skipped: "
-                    f"{original_filename}"
+                    "Duplicate upload skipped:",
+                    original_filename
                 )
 
                 continue
 
-            with open(
-                file_path,
-                "wb"
-            ) as buffer:
+            stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
 
-                buffer.write(
-                    file_content
-                )
+            file_path = os.path.join(
+                UPLOAD_DIR,
+                stored_filename
+            )
+
+            with open(file_path, "wb") as buffer:
+                buffer.write(file_content)
+
+            source = {
+                "file_path": file_path,
+                "source_name": original_filename,
+                "source_type": file_extension.lstrip("."),
+                "file_hash": file_hash,
+                "source_id": file_hash,
+                "session_id": session_id
+            }
+
+            session_sources.append(source)
+
+            new_files.append(original_filename)
+
+            source_details.append({
+                "source_type": source["source_type"],
+                "source_name": source["source_name"],
+                "source_id": source["source_id"]
+            })
 
         except HTTPException:
-
             raise
 
-        except Exception as e:
-
+        except Exception as exc:
             raise HTTPException(
                 status_code=500,
-                detail=(
-                    f"Failed to save "
-                    f"{original_filename}: "
-                    f"{str(e)}"
-                )
+                detail=f"Failed to save {original_filename}: {exc}"
             )
 
         finally:
-
             await file.close()
 
-        uploaded_sources[
-            session_id
-        ].append(
-            {
-                "file_path":
-                    file_path,
-
-                "source_name":
-                    original_filename,
-
-                "source_type":
-                    file_extension.lstrip("."),
-
-                "file_hash":
-                    file_hash,
-
-                "session_id":
-                    session_id
-            }
+    if new_files and duplicate_files:
+        message = (
+            f"{len(new_files)} new file(s) uploaded. "
+            f"{len(duplicate_files)} duplicate file(s) skipped."
         )
-
-        uploaded_files.append(
-            original_filename
+    elif new_files:
+        message = f"{len(new_files)} new file(s) uploaded."
+    elif duplicate_files:
+        message = (
+            f"{len(duplicate_files)} file(s) were already "
+            "uploaded and were skipped."
         )
-
-    if uploaded_files:
-
-        return {
-            "message":
-                "Files uploaded successfully",
-
-            "files":
-                uploaded_files
-        }
+    else:
+        message = "No new files were added."
 
     return {
-        "message":
-            "No new files were added.",
-
-        "files":
-            []
+        "message": message,
+        "files": new_files,
+        "new_files": new_files,
+        "duplicate_files": duplicate_files,
+        "sources": source_details
     }
 
 
@@ -431,10 +284,7 @@ async def upload_files(
 # URL REQUEST MODEL
 # ============================================================
 
-class URLRequest(
-    BaseModel
-):
-
+class URLRequest(BaseModel):
     url: str
 
 
@@ -444,146 +294,89 @@ class URLRequest(
 
 @app.post("/add-url")
 def add_url(
-
     request: URLRequest,
-
-    session_id: str = Header(
-        ...,
-        alias="X-Session-ID"
-    )
+    session_id: str = Header(..., alias="X-Session-ID")
 ):
-
-    session_id = validate_session_id(
-        session_id
-    )
+    session_id = validate_session_id(session_id)
 
     url = request.url.strip()
 
     if not url:
-
         raise HTTPException(
             status_code=400,
             detail="URL cannot be empty."
         )
 
-    if session_id not in url_sources:
+    normalized_url = url.rstrip("/").lower()
 
-        url_sources[
-            session_id
-        ] = []
+    # Only URLs belonging to the current browser session.
+    session_sources = url_sources.setdefault(session_id, [])
 
-    normalized_current_url = (
-        url
-        .strip()
-        .rstrip("/")
-        .lower()
-    )
-
-    for source in url_sources[
-        session_id
-    ]:
-
+    # Prevent duplicate URLs inside the current session.
+    for source in session_sources:
         existing_url = (
-            source.get(
-                "url",
-                ""
-            )
+            source.get("url", "")
             .strip()
             .rstrip("/")
             .lower()
         )
 
-        if (
-            existing_url
-            == normalized_current_url
-        ):
-
+        if existing_url == normalized_url:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "This URL has "
-                    "already been added."
-                )
+                detail="This URL has already been added."
             )
 
     try:
+        print(f"Scraping URL: {url}")
 
-        print(
-            f"Scraping URL: {url}"
-        )
-
-        text = scrape_url(
-            url
-        )
+        text = scrape_url(url)
 
         if not text or not text.strip():
-
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "The webpage did not "
-                    "contain readable content."
-                )
+                detail="The webpage did not contain readable content."
             )
 
-        url_sources[
-            session_id
-        ].append(
-            {
-                "url":
-                    url,
+        source_id = make_source_id(normalized_url)
 
-                "text":
-                    text,
+        source = {
+            "url": url,
+            "text": text,
+            "source_type": "url",
+            "source_name": url,
+            "source_url": url,
+            "source_id": source_id,
+            "session_id": session_id
+        }
 
-                "source_type":
-                    "url",
+        session_sources.append(source)
 
-                "session_id":
-                    session_id
-            }
-        )
-
-        print(
-            f"URL scraped successfully: "
-            f"{url}"
-        )
+        print(f"URL scraped successfully: {url}")
 
         return {
-            "message":
-                "URL scraped successfully",
-
-            "source_url":
-                url
+            "message": "URL scraped successfully",
+            "source_url": url,
+            "source_id": source_id
         }
 
     except HTTPException:
-
         raise
 
-    except ValueError as e:
-
-        print(
-            f"URL scraping error: {e}"
-        )
+    except ValueError as exc:
+        print(f"URL scraping error: {exc}")
 
         raise HTTPException(
             status_code=400,
-            detail=str(e)
+            detail=str(exc)
         )
 
-    except Exception as e:
-
-        print(
-            f"Unexpected URL error: {e}"
-        )
+    except Exception as exc:
+        print(f"Unexpected URL error: {exc}")
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Failed to process URL: "
-                f"{str(e)}"
-            )
+            detail=f"Failed to process URL: {exc}"
         )
 
 
@@ -593,196 +386,193 @@ def add_url(
 
 @app.post("/process")
 def process_sources(
-
-    session_id: str = Header(
-        ...,
-        alias="X-Session-ID"
-    )
+    session_id: str = Header(..., alias="X-Session-ID")
 ):
-
-    session_id = validate_session_id(
-        session_id
-    )
+    session_id = validate_session_id(session_id)
 
     try:
-
-        session_uploaded_sources = (
-            uploaded_sources.get(
-                session_id,
-                []
-            )
+        # Get sources ONLY from this current browser session.
+        session_uploaded_sources = uploaded_sources.get(
+            session_id,
+            []
         )
 
-        session_url_sources = (
-            url_sources.get(
-                session_id,
-                []
-            )
+        session_url_sources = url_sources.get(
+            session_id,
+            []
         )
 
-        # Defensive deduplication for sources that may have been added
-        # by an older backend version before duplicate prevention existed.
-        unique_uploaded_sources = []
-        seen_file_keys = set()
-
-        for source in session_uploaded_sources:
-
-            file_key = source.get(
-                "file_hash"
-            )
-
-            if not file_key:
-
-                file_path = source.get(
-                    "file_path"
-                )
-
-                if (
-                    file_path
-                    and os.path.exists(file_path)
-                ):
-
-                    try:
-
-                        with open(
-                            file_path,
-                            "rb"
-                        ) as existing_file:
-
-                            file_key = hashlib.sha256(
-                                existing_file.read()
-                            ).hexdigest()
-
-                    except Exception:
-
-                        file_key = None
-
-            if not file_key:
-
-                file_key = (
-                    source.get(
-                        "source_name",
-                        ""
-                    ),
-                    source.get(
-                        "file_path",
-                        ""
-                    )
-                )
-
-            if file_key in seen_file_keys:
-
-                print(
-                    "Skipping duplicate source during "
-                    f"processing: {source.get('source_name', '')}"
-                )
-
-                continue
-
-            seen_file_keys.add(
-                file_key
-            )
-
-            unique_uploaded_sources.append(
-                source
-            )
-
-        session_uploaded_sources = (
-            unique_uploaded_sources
-        )
-
-        print(
-            "================================"
-        )
-
-        print(
-            "Processing session:",
-            session_id
-        )
-
-        print(
-            "Unique files:",
-            len(
-                session_uploaded_sources
-            )
-        )
-
-        print(
-            "URLs:",
-            len(
-                session_url_sources
-            )
-        )
-
-        print(
-            "================================"
-        )
-
-        if (
-            not session_uploaded_sources
-            and
-            not session_url_sources
-        ):
-
+        if not session_uploaded_sources and not session_url_sources:
             return {
-                "message":
-                    "No sources found "
-                    "for this session.",
-
-                "files_processed":
-                    0,
-
-                "urls_processed":
-                    0,
-
-                "chunks_stored":
-                    0
+                "message": "No sources found for this session.",
+                "files_processed": 0,
+                "files_skipped": 0,
+                "urls_processed": 0,
+                "urls_skipped": 0,
+                "chunks_stored": 0
             }
 
         result = process_all_sources(
-            uploaded_sources=
-                session_uploaded_sources,
-
-            url_sources=
-                session_url_sources,
-
-            session_id=
-                session_id
+            uploaded_sources=session_uploaded_sources,
+            url_sources=session_url_sources,
+            session_id=session_id
         )
 
         return {
-            "message":
-                "Sources processed successfully",
-
+            "message": "Sources processed successfully",
             **result
         }
 
-    except Exception as e:
-
-        print(
-            "Source processing error:",
-            e
-        )
+    except Exception as exc:
+        print("Source processing error:", exc)
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Source processing failed: "
-                f"{str(e)}"
-            )
+            detail=f"Source processing failed: {exc}"
         )
+
+
+# ============================================================
+# REMOVE SOURCE REQUEST
+# ============================================================
+
+class RemoveSourceRequest(BaseModel):
+    source_type: str
+    source_name: str
+
+
+# ============================================================
+# REMOVE SOURCE
+# ============================================================
+
+@app.delete("/remove-source")
+def remove_source(
+    request: RemoveSourceRequest,
+    session_id: str = Header(..., alias="X-Session-ID")
+):
+    session_id = validate_session_id(session_id)
+
+    source_type = request.source_type.strip().lower()
+    source_name = request.source_name.strip()
+
+    if not source_type or not source_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Source type and source name are required."
+        )
+
+    source_id = None
+    removed_from_session = False
+
+    # ========================================================
+    # REMOVE URL
+    # ========================================================
+
+    if source_type == "url":
+        current_sources = url_sources.get(session_id, [])
+        remaining_sources = []
+
+        requested_url = source_name.rstrip("/").lower()
+
+        for source in current_sources:
+            existing_url = (
+                source.get("url", "")
+                .strip()
+                .rstrip("/")
+                .lower()
+            )
+
+            if existing_url == requested_url:
+                source_id = (
+                    source.get("source_id")
+                    or make_source_id(existing_url)
+                )
+
+                removed_from_session = True
+                continue
+
+            remaining_sources.append(source)
+
+        url_sources[session_id] = remaining_sources
+
+    # ========================================================
+    # REMOVE FILE
+    # ========================================================
+
+    else:
+        current_sources = uploaded_sources.get(session_id, [])
+        remaining_sources = []
+
+        for source in current_sources:
+            if source.get("source_name") == source_name:
+                source_id = (
+                    source.get("source_id")
+                    or source.get("file_hash")
+                )
+
+                removed_from_session = True
+
+                file_path = source.get("file_path")
+
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except OSError as exc:
+                        print(
+                            "Could not remove local file:",
+                            exc
+                        )
+
+                continue
+
+            remaining_sources.append(source)
+
+        uploaded_sources[session_id] = remaining_sources
+
+    # ========================================================
+    # DELETE QDRANT VECTORS
+    # ========================================================
+
+    if source_id:
+        try:
+            delete_source_vectors(
+                session_id=session_id,
+                source_id=source_id
+            )
+
+        except Exception as exc:
+            print(
+                "Qdrant source deletion error:",
+                exc
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Failed to remove source from "
+                    f"vector database: {exc}"
+                )
+            )
+
+    return {
+        "message": (
+            "Source removed successfully."
+            if removed_from_session
+            else "Source was not found in this session."
+        ),
+        "removed_from_session": removed_from_session,
+        "source_type": source_type,
+        "source_name": source_name,
+        "source_id": source_id
+    }
 
 
 # ============================================================
 # ASK REQUEST MODEL
 # ============================================================
 
-class AskRequest(
-    BaseModel
-):
-
+class AskRequest(BaseModel):
     question: str
-
     conversation_history: list[dict] = Field(
         default_factory=list
     )
@@ -794,133 +584,85 @@ class AskRequest(
 
 @app.post("/ask")
 def ask_question(
-
     request: AskRequest,
-
-    session_id: str = Header(
-        ...,
-        alias="X-Session-ID"
-    )
+    session_id: str = Header(..., alias="X-Session-ID")
 ):
-
-    session_id = validate_session_id(
-        session_id
-    )
+    session_id = validate_session_id(session_id)
 
     question = request.question.strip()
 
     if not question:
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Question cannot be empty."
-            )
+            detail="Question cannot be empty."
         )
 
     try:
+        # ====================================================
+        # CURRENT SESSION SOURCES ONLY
+        # ====================================================
 
-        session_uploaded_sources = (
-            uploaded_sources.get(
-                session_id,
-                []
-            )
+        session_uploaded_sources = uploaded_sources.get(
+            session_id,
+            []
         )
 
-        session_url_sources = (
-            url_sources.get(
-                session_id,
-                []
-            )
+        session_url_sources = url_sources.get(
+            session_id,
+            []
         )
 
-        print(
-            "================================"
-        )
-
-        print(
-            f"Session: {session_id}"
-        )
-
-        print(
-            f"Question: {question}"
-        )
-
+        print("================================")
+        print(f"Session: {session_id}")
+        print(f"Question: {question}")
         print(
             "Current files:",
-            len(
-                session_uploaded_sources
-            )
+            len(session_uploaded_sources)
         )
-
         print(
             "Current URLs:",
-            len(
-                session_url_sources
-            )
+            len(session_url_sources)
         )
-
         print(
             "Conversation history:",
-            len(
-                request.conversation_history
-            )
+            len(request.conversation_history)
         )
+        print("================================")
 
-        print(
-            "================================"
-        )
-
-        # IMPORTANT:
-        # Never search Qdrant when the current session
-        # has no active sources.
+        # CRITICAL:
         #
-        # Qdrant is persistent, while uploaded_sources
-        # and url_sources are in-memory. Therefore old
-        # vectors can exist even when the current session
-        # has no current sources.
+        # Qdrant is persistent.
+        # The current session source dictionaries are in memory.
+        #
+        # Therefore, NEVER search Qdrant when this new browser
+        # session has no sources.
+        #
+        # This prevents old-session vectors from being used
+        # after a browser refresh.
 
-        if (
-            not session_uploaded_sources
-            and
-            not session_url_sources
-        ):
-
+        if not session_uploaded_sources and not session_url_sources:
             return {
-                "answer":
+                "answer": (
                     "I could not find that information "
-                    "in the provided sources.",
-
-                "sources":
-                    []
+                    "in the provided sources."
+                ),
+                "sources": []
             }
 
         result = answer_question(
-            question=
-                question,
-
-            conversation_history=
-                request.conversation_history,
-
-            session_id=
-                session_id
+            question=question,
+            conversation_history=request.conversation_history,
+            session_id=session_id
         )
 
         return result
 
-    except Exception as e:
-
-        print(
-            "Question answering error:",
-            e
-        )
+    except Exception as exc:
+        print("Question answering error:", exc)
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Failed to generate answer: "
-                f"{str(e)}"
-            )
+            detail=f"Failed to generate answer: {exc}"
         )
 
 
@@ -930,49 +672,32 @@ def ask_question(
 
 @app.post("/transcribe")
 async def transcribe_voice(
-
     audio: UploadFile = File(...)
 ):
-
     try:
-
-        audio_bytes = (
-            await audio.read()
-        )
+        audio_bytes = await audio.read()
 
         if not audio_bytes:
-
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "No audio data received."
-                )
+                detail="No audio data received."
             )
 
-        filename = (
-            audio.filename
-            or
-            "recording.webm"
-        )
+        filename = audio.filename or "recording.wav"
 
         print(
-            f"Received audio: "
-            f"{filename} "
+            f"Received audio: {filename} "
             f"({len(audio_bytes)} bytes)"
         )
 
         text = transcribe_audio(
-            audio_bytes=
-                audio_bytes,
-
-            filename=
-                filename
+            audio_bytes=audio_bytes,
+            filename=filename
         )
 
-        text = text.strip()
+        text = str(text or "").strip()
 
         if not text:
-
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -981,32 +706,19 @@ async def transcribe_voice(
                 )
             )
 
-        print(
-            f"Transcription: {text}"
-        )
+        print(f"Transcription: {text}")
 
-        return {
-            "text":
-                text
-        }
+        return {"text": text}
 
     except HTTPException:
-
         raise
 
-    except Exception as e:
-
-        print(
-            "Transcription error:",
-            str(e)
-        )
+    except Exception as exc:
+        print("Transcription error:", exc)
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Transcription failed: "
-                f"{str(e)}"
-            )
+            detail=f"Transcription failed: {exc}"
         )
 
 
@@ -1014,10 +726,7 @@ async def transcribe_voice(
 # TTS REQUEST MODEL
 # ============================================================
 
-class TTSRequest(
-    BaseModel
-):
-
+class TTSRequest(BaseModel):
     text: str
 
 
@@ -1027,81 +736,49 @@ class TTSRequest(
 
 @app.post("/tts")
 async def text_to_speech(
-
     request: TTSRequest
 ):
-
     text = request.text.strip()
 
     if not text:
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Text cannot be empty."
-            )
+            detail="Text cannot be empty."
         )
 
     temp_file = None
 
     try:
-
-        temp_file = (
-            tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".mp3"
-            )
+        temp_file = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".mp3"
         )
 
-        output_path = (
-            temp_file.name
-        )
+        output_path = temp_file.name
 
         temp_file.close()
 
         await generate_speech(
             text=text,
-            output_file=
-                output_path
+            output_file=output_path
         )
 
         return FileResponse(
             output_path,
-            media_type=
-                "audio/mpeg",
-            filename=
-                "answer.mp3"
+            media_type="audio/mpeg",
+            filename="answer.mp3"
         )
 
-    except Exception as e:
-
-        if (
-            temp_file
-            and
-            os.path.exists(
-                temp_file.name
-            )
-        ):
-
+    except Exception as exc:
+        if temp_file and os.path.exists(temp_file.name):
             try:
-
-                os.remove(
-                    temp_file.name
-                )
-
-            except Exception:
-
+                os.remove(temp_file.name)
+            except OSError:
                 pass
 
-        print(
-            "TTS error:",
-            e
-        )
+        print("TTS error:", exc)
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                "TTS generation failed: "
-                f"{str(e)}"
-            )
+            detail=f"TTS generation failed: {exc}"
         )
