@@ -1,4 +1,5 @@
 import re
+import time
 import requests
 
 from bs4 import BeautifulSoup
@@ -18,11 +19,11 @@ from urllib.parse import (
 # CONFIGURATION
 # ============================================================
 
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 30
 
-PLAYWRIGHT_TIMEOUT = 30000
+PLAYWRIGHT_TIMEOUT = 45000
 
-JINA_TIMEOUT = 60
+JINA_TIMEOUT = 90
 
 MIN_TEXT_LENGTH = 100
 
@@ -32,8 +33,29 @@ MAX_PAGES = 3
 # Maximum combined content stored from one website
 MAX_TOTAL_CHARACTERS = 10000
 
+# Number of retries for HTTP requests
+REQUEST_RETRIES = 2
+
+# Small delay between retries
+RETRY_DELAY = 1
+
+
 JINA_READER_URL = (
     "https://r.jina.ai/"
+)
+
+
+# ============================================================
+# USER AGENT
+# ============================================================
+
+USER_AGENT = (
+    "Mozilla/5.0 "
+    "(Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 "
+    "(KHTML, like Gecko) "
+    "Chrome/151.0.0.0 "
+    "Safari/537.36"
 )
 
 
@@ -135,6 +157,12 @@ def validate_url(
     url: str
 ) -> str:
 
+    if not isinstance(url, str):
+
+        raise ValueError(
+            "URL must be a string."
+        )
+
     url = url.strip()
 
     if not url:
@@ -188,11 +216,14 @@ def normalize_url(
             "javascript:",
             "mailto:",
             "tel:",
-            "data:"
+            "data:",
+            "whatsapp:"
         )
     ):
 
         return None
+
+    # Convert relative URL to absolute URL
 
     absolute_url = urljoin(
         base_url,
@@ -319,6 +350,10 @@ def extract_html_text(
     html: str
 ) -> str:
 
+    if not html:
+
+        return ""
+
     soup = BeautifulSoup(
         html,
         "html.parser"
@@ -334,13 +369,17 @@ def extract_html_text(
             "svg",
             "canvas",
             "iframe",
-            "template"
+            "template",
+            "nav",
+            "footer"
         ]
     ):
 
         element.decompose()
 
+    # --------------------------------------------------------
     # Prefer <main>
+    # --------------------------------------------------------
 
     main_content = soup.find(
         "main"
@@ -355,7 +394,9 @@ def extract_html_text(
 
     else:
 
+        # ----------------------------------------------------
         # Otherwise prefer <article>
+        # ----------------------------------------------------
 
         article = soup.find(
             "article"
@@ -369,6 +410,10 @@ def extract_html_text(
             )
 
         else:
+
+            # ------------------------------------------------
+            # Otherwise use body
+            # ------------------------------------------------
 
             body = soup.find(
                 "body"
@@ -401,6 +446,10 @@ def extract_internal_links_from_html(
     base_url: str,
     html: str
 ) -> list[str]:
+
+    if not html:
+
+        return []
 
     soup = BeautifulSoup(
         html,
@@ -452,15 +501,20 @@ def extract_links_from_markdown(
     markdown: str
 ) -> list[str]:
 
+    if not markdown:
+
+        return []
+
     links = []
 
-    # Markdown format:
+    # Markdown links:
     #
     # [text](https://example.com/page)
+    # [text](/page)
 
     pattern = (
         r"\[[^\]]*\]"
-        r"\((https?://[^)\s]+|/[^)\s]+)"
+        r"\(([^)\s]+)"
         r"\)"
     )
 
@@ -528,6 +582,59 @@ def prioritize_links(
 
 
 # ============================================================
+# REQUEST HEADERS
+# ============================================================
+
+def get_request_headers() -> dict:
+
+    return {
+
+        "User-Agent":
+            USER_AGENT,
+
+        "Accept":
+            (
+                "text/html,"
+                "application/xhtml+xml,"
+                "application/xml;q=0.9,"
+                "image/avif,"
+                "image/webp,"
+                "*/*;q=0.8"
+            ),
+
+        "Accept-Language":
+            "en-US,en;q=0.9",
+
+        "Accept-Encoding":
+            "gzip, deflate",
+
+        "Cache-Control":
+            "no-cache",
+
+        "Pragma":
+            "no-cache",
+
+        "Connection":
+            "keep-alive",
+
+        "Upgrade-Insecure-Requests":
+            "1",
+
+        "Sec-Fetch-Dest":
+            "document",
+
+        "Sec-Fetch-Mode":
+            "navigate",
+
+        "Sec-Fetch-Site":
+            "none",
+
+        "Sec-Fetch-User":
+            "?1"
+    }
+
+
+# ============================================================
 # REQUESTS SCRAPER
 # ============================================================
 
@@ -535,85 +642,130 @@ def scrape_with_requests(
     url: str
 ) -> tuple[str, list[str]]:
 
-    headers = {
+    headers = get_request_headers()
 
-        "User-Agent":
-            (
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/151.0.0.0 "
-                "Safari/537.36"
-            ),
+    last_error = None
 
-        "Accept":
-            (
-                "text/html,"
-                "application/xhtml+xml,"
-                "application/xml;q=0.9,"
-                "*/*;q=0.8"
-            ),
-
-        "Accept-Language":
-            "en-US,en;q=0.9",
-
-        "Connection":
-            "keep-alive"
-    }
-
-    response = requests.get(
-
-        url,
-
-        headers=headers,
-
-        timeout=REQUEST_TIMEOUT,
-
-        allow_redirects=True
-    )
-
-    response.raise_for_status()
-
-    content_type = (
-        response.headers
-        .get(
-            "Content-Type",
-            ""
-        )
-        .lower()
-    )
-
-    if (
-        "text/html"
-        not in content_type
+    for attempt in range(
+        1,
+        REQUEST_RETRIES + 1
     ):
 
-        raise ValueError(
-            "The URL did not return an HTML webpage."
-        )
+        try:
 
-    html = response.text
+            print(
+                f"HTTP attempt "
+                f"{attempt}/{REQUEST_RETRIES}: "
+                f"{url}"
+            )
 
-    text = extract_html_text(
-        html
-    )
+            response = requests.get(
 
-    if len(text) < MIN_TEXT_LENGTH:
+                url,
 
-        raise ValueError(
-            "The webpage contains too little "
-            "readable content."
-        )
+                headers=headers,
 
-    links = extract_internal_links_from_html(
-        url,
-        html
-    )
+                timeout=REQUEST_TIMEOUT,
 
-    return (
-        text,
-        links
+                allow_redirects=True
+            )
+
+            # Helpful diagnostics
+
+            print(
+                f"HTTP status: "
+                f"{response.status_code}"
+            )
+
+            print(
+                f"Final URL: "
+                f"{response.url}"
+            )
+
+            response.raise_for_status()
+
+            content_type = (
+                response.headers
+                .get(
+                    "Content-Type",
+                    ""
+                )
+                .lower()
+            )
+
+            print(
+                f"Content-Type: "
+                f"{content_type}"
+            )
+
+            # ------------------------------------------------
+            # Content type validation
+            # ------------------------------------------------
+
+            if (
+                "text/html"
+                not in content_type
+                and "application/xhtml+xml"
+                not in content_type
+            ):
+
+                raise ValueError(
+                    "The URL did not return "
+                    "an HTML webpage. "
+                    f"Content-Type: {content_type}"
+                )
+
+            html = response.text
+
+            if not html:
+
+                raise ValueError(
+                    "The server returned empty HTML."
+                )
+
+            text = extract_html_text(
+                html
+            )
+
+            print(
+                f"Extracted text length: "
+                f"{len(text)}"
+            )
+
+            if len(text) < MIN_TEXT_LENGTH:
+
+                raise ValueError(
+                    "The webpage contains too little "
+                    "readable content."
+                )
+
+            links = extract_internal_links_from_html(
+                response.url,
+                html
+            )
+
+            return (
+                text,
+                links
+            )
+
+        except Exception as e:
+
+            last_error = str(e)
+
+            print(
+                f"HTTP attempt {attempt} failed: "
+                f"{last_error}"
+            )
+
+            if attempt < REQUEST_RETRIES:
+
+                time.sleep(
+                    RETRY_DELAY
+                )
+
+    raise ValueError(
+        f"HTTP scraping failed: {last_error}"
     )
 
 
@@ -625,32 +777,85 @@ def scrape_with_playwright(
     url: str
 ) -> tuple[str, list[str]]:
 
+    print(
+        f"Starting Playwright: {url}"
+    )
+
     with sync_playwright() as p:
 
-        browser = p.chromium.launch(
-            headless=True
-        )
-
-        page = browser.new_page(
-
-            user_agent=(
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/151.0.0.0 "
-                "Safari/537.36"
-            ),
-
-            viewport={
-                "width": 1440,
-                "height": 900
-            }
-        )
+        browser = None
 
         try:
 
-            page.goto(
+            # ------------------------------------------------
+            # Launch Chromium
+            # ------------------------------------------------
+
+            browser = p.chromium.launch(
+
+                headless=True,
+
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox"
+                ]
+            )
+
+            context = browser.new_context(
+
+                user_agent=USER_AGENT,
+
+                viewport={
+                    "width": 1440,
+                    "height": 900
+                },
+
+                locale="en-US",
+
+                extra_http_headers={
+
+                    "Accept-Language":
+                        "en-US,en;q=0.9"
+                }
+            )
+
+            page = context.new_page()
+
+            # ------------------------------------------------
+            # Block unnecessary resources
+            # ------------------------------------------------
+
+            def handle_route(
+                route
+            ):
+
+                resource_type = (
+                    route.request.resource_type
+                )
+
+                if resource_type in (
+                    "image",
+                    "media",
+                    "font"
+                ):
+
+                    route.abort()
+
+                else:
+
+                    route.continue_()
+
+            page.route(
+                "**/*",
+                handle_route
+            )
+
+            # ------------------------------------------------
+            # Navigate
+            # ------------------------------------------------
+
+            response = page.goto(
 
                 url,
 
@@ -659,27 +864,75 @@ def scrape_with_playwright(
                 timeout=PLAYWRIGHT_TIMEOUT
             )
 
-            # Give JavaScript-rendered content a short time.
+            if response:
+
+                print(
+                    f"Playwright HTTP status: "
+                    f"{response.status}"
+                )
+
+                print(
+                    f"Playwright final URL: "
+                    f"{page.url}"
+                )
+
+            # ------------------------------------------------
+            # Allow JavaScript to render
+            # ------------------------------------------------
 
             page.wait_for_timeout(
-                1500
+                3000
             )
+
+            # Try waiting for network activity to settle.
+            # Some websites never become completely idle,
+            # so failure here should not stop scraping.
+
+            try:
+
+                page.wait_for_load_state(
+                    "networkidle",
+                    timeout=10000
+                )
+
+            except Exception:
+
+                print(
+                    "Playwright networkidle timeout "
+                    "- continuing with current page."
+                )
+
+            # ------------------------------------------------
+            # Get rendered HTML
+            # ------------------------------------------------
 
             html = page.content()
 
+            if not html:
+
+                raise ValueError(
+                    "Playwright returned empty HTML."
+                )
+
             text = extract_html_text(
                 html
+            )
+
+            print(
+                f"Playwright extracted text length: "
+                f"{len(text)}"
             )
 
             if len(text) < MIN_TEXT_LENGTH:
 
                 raise ValueError(
                     "The webpage did not contain "
-                    "enough readable content."
+                    "enough readable content "
+                    "after JavaScript rendering."
                 )
 
             links = extract_internal_links_from_html(
-                url,
+                page.url,
                 html
             )
 
@@ -688,9 +941,17 @@ def scrape_with_playwright(
                 links
             )
 
+        except Exception as e:
+
+            raise ValueError(
+                f"Playwright scraping failed: {e}"
+            )
+
         finally:
 
-            browser.close()
+            if browser:
+
+                browser.close()
 
 
 # ============================================================
@@ -706,10 +967,14 @@ def scrape_with_jina(
         + url
     )
 
+    print(
+        f"Starting Jina Reader: {reader_url}"
+    )
+
     headers = {
 
         "Accept":
-            "text/plain",
+            "text/plain, text/markdown, */*",
 
         "User-Agent":
             (
@@ -718,64 +983,121 @@ def scrape_with_jina(
             )
     }
 
-    response = requests.get(
+    try:
 
-        reader_url,
+        response = requests.get(
 
-        headers=headers,
+            reader_url,
 
-        timeout=JINA_TIMEOUT
-    )
+            headers=headers,
 
-    response.raise_for_status()
+            timeout=JINA_TIMEOUT,
 
-    text = response.text.strip()
-
-    if not text:
-
-        raise ValueError(
-            "Jina Reader returned empty content."
+            allow_redirects=True
         )
 
-    lower_text = text.lower()
-
-    error_indicators = [
-
-        "error:",
-
-        "failed to fetch",
-
-        "page not found",
-
-        "unable to fetch"
-    ]
-
-    if any(
-        indicator in lower_text
-        for indicator in error_indicators
-    ):
-
-        raise ValueError(
-            "Jina Reader could not retrieve "
-            "the webpage."
+        print(
+            f"Jina HTTP status: "
+            f"{response.status_code}"
         )
 
-    if len(text) < MIN_TEXT_LENGTH:
-
-        raise ValueError(
-            "Jina Reader returned too little "
-            "readable content."
+        print(
+            f"Jina Content-Type: "
+            f"{response.headers.get('Content-Type', '')}"
         )
 
-    links = extract_links_from_markdown(
-        url,
-        text
-    )
+        response.raise_for_status()
 
-    return (
-        clean_text(text),
-        links
-    )
+        text = response.text.strip()
+
+        if not text:
+
+            raise ValueError(
+                "Jina Reader returned empty content."
+            )
+
+        # ----------------------------------------------------
+        # Detect common Jina failure responses
+        # ----------------------------------------------------
+
+        lower_text = text.lower()
+
+        error_indicators = [
+
+            "error:",
+
+            "failed to fetch",
+
+            "failed to load",
+
+            "page not found",
+
+            "unable to fetch",
+
+            "unable to load",
+
+            "could not fetch",
+
+            "couldn't fetch",
+
+            "access denied",
+
+            "403 forbidden",
+
+            "404 not found",
+
+            "502 bad gateway",
+
+            "503 service unavailable"
+        ]
+
+        for indicator in error_indicators:
+
+            if indicator in lower_text:
+
+                raise ValueError(
+                    "Jina Reader returned an error: "
+                    f"{text[:500]}"
+                )
+
+        # ----------------------------------------------------
+        # Validate content length
+        # ----------------------------------------------------
+
+        if len(text) < MIN_TEXT_LENGTH:
+
+            raise ValueError(
+                "Jina Reader returned too little "
+                "readable content."
+            )
+
+        links = extract_links_from_markdown(
+            url,
+            text
+        )
+
+        return (
+            clean_text(text),
+            links
+        )
+
+    except requests.exceptions.Timeout:
+
+        raise ValueError(
+            "Jina Reader request timed out."
+        )
+
+    except requests.exceptions.HTTPError as e:
+
+        raise ValueError(
+            f"Jina Reader HTTP error: {e}"
+        )
+
+    except requests.exceptions.RequestException as e:
+
+        raise ValueError(
+            f"Jina Reader network error: {e}"
+        )
 
 
 # ============================================================
@@ -793,9 +1115,9 @@ def scrape_single_page(
     jina_error = None
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # METHOD 1: REQUESTS
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -804,7 +1126,8 @@ def scrape_single_page(
         )
 
         print(
-            f"URL scraped using HTTP: {url}"
+            f"URL scraped successfully using HTTP: "
+            f"{url}"
         )
 
         return (
@@ -818,14 +1141,17 @@ def scrape_single_page(
         requests_error = str(e)
 
         print(
-            "Requests scraping failed:",
+            "\nRequests scraping failed:"
+        )
+
+        print(
             requests_error
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # METHOD 2: PLAYWRIGHT
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -834,7 +1160,8 @@ def scrape_single_page(
         )
 
         print(
-            f"URL scraped using Playwright: {url}"
+            f"URL scraped successfully using "
+            f"Playwright: {url}"
         )
 
         return (
@@ -848,14 +1175,17 @@ def scrape_single_page(
         playwright_error = str(e)
 
         print(
-            "Playwright scraping failed:",
+            "\nPlaywright scraping failed:"
+        )
+
+        print(
             playwright_error
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # METHOD 3: JINA READER
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -864,7 +1194,8 @@ def scrape_single_page(
         )
 
         print(
-            f"URL scraped using Jina Reader: {url}"
+            f"URL scraped successfully using "
+            f"Jina Reader: {url}"
         )
 
         return (
@@ -878,27 +1209,51 @@ def scrape_single_page(
         jina_error = str(e)
 
         print(
-            "Jina Reader scraping failed:",
+            "\nJina Reader scraping failed:"
+        )
+
+        print(
             jina_error
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # ALL METHODS FAILED
-    # --------------------------------------------------------
+    # ========================================================
 
-    raise ValueError(
+    error_message = (
 
         "Unable to scrape webpage.\n\n"
 
-        f"HTTP scraping failed: "
+        "========== HTTP ==========\n"
         f"{requests_error}\n\n"
 
-        f"Browser scraping failed: "
+        "========== PLAYWRIGHT ==========\n"
         f"{playwright_error}\n\n"
 
-        f"External Reader fallback failed: "
+        "========== JINA READER ==========\n"
         f"{jina_error}"
+    )
+
+    print(
+        "\n"
+        + "=" * 70
+    )
+
+    print(
+        "ALL SCRAPING METHODS FAILED"
+    )
+
+    print(
+        error_message
+    )
+
+    print(
+        "=" * 70
+    )
+
+    raise ValueError(
+        error_message
     )
 
 
@@ -910,9 +1265,32 @@ def scrape_url(
     url: str
 ) -> str:
 
+    # ========================================================
+    # VALIDATE URL
+    # ========================================================
+
     url = validate_url(
         url
     )
+
+    # Normalize initial URL
+
+    normalized_start_url = normalize_url(
+        url,
+        url
+    )
+
+    if not normalized_start_url:
+
+        raise ValueError(
+            "Invalid website URL."
+        )
+
+    url = normalized_start_url
+
+    # ========================================================
+    # CRAWLER STATE
+    # ========================================================
 
     visited = set()
 
@@ -967,11 +1345,27 @@ def scrape_url(
         )
 
         print(
-            f"\nScraping page "
-            f"{len(visited)}/{MAX_PAGES}: "
-            f"{current_url}"
+            "\n"
+            + "=" * 70
         )
 
+        print(
+            f"Scraping page "
+            f"{len(visited)}/{MAX_PAGES}"
+        )
+
+        print(
+            current_url
+        )
+
+        print(
+            "=" * 70
+        )
+
+
+        # ====================================================
+        # SCRAPE PAGE
+        # ====================================================
 
         try:
 
@@ -1001,9 +1395,9 @@ def scrape_url(
             )
 
 
-            # ------------------------------------------------
+            # =================================================
             # DISCOVER LINKS
-            # ------------------------------------------------
+            # =================================================
 
             for link in links:
 
@@ -1026,14 +1420,18 @@ def scrape_url(
         except Exception as e:
 
             print(
-                f"Could not scrape page "
-                f"{current_url}: {e}"
+                f"\nCould not scrape page "
+                f"{current_url}:"
+            )
+
+            print(
+                str(e)
             )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # PRIORITIZE NEXT PAGES
-        # ----------------------------------------------------
+        # ====================================================
 
         candidates = [
 
@@ -1061,7 +1459,14 @@ def scrape_url(
     if not collected_pages:
 
         raise ValueError(
-            f"Unable to scrape the website: {url}"
+
+            "Unable to scrape the website: "
+            f"{url}\n\n"
+
+            "All scraping methods failed. "
+            "Check the backend terminal for "
+            "the detailed HTTP, Playwright and "
+            "Jina Reader errors."
         )
 
 
@@ -1081,20 +1486,25 @@ def scrape_url(
             "text"
         ]
 
+        page_method = page[
+            "method"
+        ]
+
         if not page_text:
 
             continue
 
         combined_parts.append(
 
-            f"Source Page: {page_url}\n\n"
+            f"Source Page: {page_url}\n"
+            f"Scraping Method: {page_method}\n\n"
             f"{page_text}"
         )
 
 
     combined_text = (
 
-        "\n\n"
+        "\n\n---\n\n"
 
         + "\n\n---\n\n".join(
             combined_parts
@@ -1119,7 +1529,7 @@ def scrape_url(
         )
 
         print(
-            f"Website content limited to "
+            f"\nWebsite content limited to "
             f"{MAX_TOTAL_CHARACTERS} characters."
         )
 
@@ -1141,7 +1551,16 @@ def scrape_url(
     # ========================================================
 
     print(
-        "\nWebsite crawling completed."
+        "\n"
+        + "=" * 70
+    )
+
+    print(
+        "WEBSITE CRAWLING COMPLETED"
+    )
+
+    print(
+        "=" * 70
     )
 
     print(
@@ -1150,8 +1569,28 @@ def scrape_url(
     )
 
     print(
+        f"Pages attempted: "
+        f"{len(visited)}"
+    )
+
+    print(
         f"Total characters: "
         f"{len(combined_text)}"
+    )
+
+    print(
+        "Methods used:"
+    )
+
+    for page in collected_pages:
+
+        print(
+            f"  - {page['method']}: "
+            f"{page['url']}"
+        )
+
+    print(
+        "=" * 70
     )
 
     return combined_text
