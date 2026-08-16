@@ -40,10 +40,10 @@ JINA_TIMEOUT = 90
 MIN_TEXT_LENGTH = 100
 
 # Maximum number of pages to crawl
-MAX_PAGES = 7
+MAX_PAGES = 5
 
 # Maximum combined content stored from one website
-MAX_TOTAL_CHARACTERS = 50000
+MAX_TOTAL_CHARACTERS = 40000
 
 # Number of retries for HTTP requests
 REQUEST_RETRIES = 2
