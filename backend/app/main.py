@@ -304,15 +304,12 @@ def add_url(
     if not url:
         raise HTTPException(
             status_code=400,
-            detail="URL cannot be empty."
+            detail="Unsupported URL. Please enter a valid website URL."
         )
 
     normalized_url = url.rstrip("/").lower()
-
-    # Only URLs belonging to the current browser session.
     session_sources = url_sources.setdefault(session_id, [])
 
-    # Prevent duplicate URLs inside the current session.
     for source in session_sources:
         existing_url = (
             source.get("url", "")
@@ -328,8 +325,6 @@ def add_url(
             )
 
     try:
-        print(f"Scraping URL: {url}")
-
         text = scrape_url(url)
 
         if not text or not text.strip():
@@ -352,33 +347,32 @@ def add_url(
 
         session_sources.append(source)
 
-        print(f"URL scraped successfully: {url}")
-
         return {
             "message": "URL scraped successfully",
             "source_url": url,
             "source_id": source_id
         }
 
-    except HTTPException:
-        raise
-
-    except ValueError as exc:
-        print(f"URL scraping error: {exc}")
-
+    except UnsupportedURL as exc:
         raise HTTPException(
             status_code=400,
             detail=str(exc)
         )
 
-    except Exception as exc:
-        print(f"Unexpected URL error: {exc}")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
 
+    except HTTPException:
+        raise
+
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process URL: {exc}"
         )
-
 
 # ============================================================
 # PROCESS SOURCES
@@ -629,16 +623,7 @@ def ask_question(
         )
         print("================================")
 
-        # CRITICAL:
-        #
-        # Qdrant is persistent.
-        # The current session source dictionaries are in memory.
-        #
-        # Therefore, NEVER search Qdrant when this new browser
-        # session has no sources.
-        #
-        # This prevents old-session vectors from being used
-        # after a browser refresh.
+        
 
         if not session_uploaded_sources and not session_url_sources:
             return {

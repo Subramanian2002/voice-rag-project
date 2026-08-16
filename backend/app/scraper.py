@@ -16,6 +16,18 @@ from urllib.parse import (
 
 
 # ============================================================
+# CUSTOM EXCEPTION
+# ============================================================
+
+class UnsupportedURL(Exception):
+    """
+    Raised when the user provides an invalid or unsupported URL.
+    """
+
+    pass
+
+
+# ============================================================
 # CONFIGURATION
 # ============================================================
 
@@ -157,38 +169,219 @@ def validate_url(
     url: str
 ) -> str:
 
+    # --------------------------------------------------------
+    # Check data type
+    # --------------------------------------------------------
+
     if not isinstance(url, str):
 
-        raise ValueError(
-            "URL must be a string."
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website URL."
         )
+
+    # --------------------------------------------------------
+    # Remove leading/trailing spaces
+    # --------------------------------------------------------
 
     url = url.strip()
 
     if not url:
 
-        raise ValueError(
-            "URL cannot be empty."
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website URL."
         )
+
+    # --------------------------------------------------------
+    # Parse URL
+    # --------------------------------------------------------
 
     parsed = urlparse(
         url
     )
 
-    if parsed.scheme not in (
+    # --------------------------------------------------------
+    # Only HTTP and HTTPS are supported
+    # --------------------------------------------------------
+
+    if parsed.scheme.lower() not in (
         "http",
         "https"
     ):
 
-        raise ValueError(
-            "Only HTTP and HTTPS URLs are supported."
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website URL "
+            "starting with http:// or https://."
         )
+
+    # --------------------------------------------------------
+    # URL must contain a hostname
+    # --------------------------------------------------------
 
     if not parsed.netloc:
 
-        raise ValueError(
-            "Invalid URL."
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website URL."
         )
+
+    # --------------------------------------------------------
+    # Extract hostname
+    # --------------------------------------------------------
+
+    try:
+
+        hostname = parsed.hostname
+
+    except ValueError:
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "The website address is invalid."
+        )
+
+    if not hostname:
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website URL."
+        )
+
+    hostname = hostname.lower()
+
+    # --------------------------------------------------------
+    # Reject whitespace anywhere in URL
+    # --------------------------------------------------------
+
+    if any(
+        character.isspace()
+        for character in url
+    ):
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "The URL cannot contain spaces."
+        )
+
+    # --------------------------------------------------------
+    # Reject nested URLs
+    #
+    # Example:
+    #
+    # https://www.whatsapp.com/https://huggingface.co
+    #
+    # --------------------------------------------------------
+
+    path_and_query = (
+        parsed.path
+        + "?"
+        + parsed.query
+    )
+
+    if re.search(
+        r"https?://",
+        path_and_query,
+        re.IGNORECASE
+    ):
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "The URL contains another URL inside it."
+        )
+
+    # --------------------------------------------------------
+    # Reject malformed hostnames
+    # --------------------------------------------------------
+
+    if (
+        hostname.startswith(".")
+        or hostname.endswith(".")
+        or ".." in hostname
+    ):
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "The website address is invalid."
+        )
+
+    # --------------------------------------------------------
+    # Public website validation
+    #
+    # Normal domains should contain a dot:
+    #
+    # google.com
+    # knotopian.com
+    # huggingface.co
+    #
+    # This rejects:
+    #
+    # https://hello
+    # https://abc
+    #
+    # We still allow valid IPv4 addresses.
+    # --------------------------------------------------------
+
+    is_ipv4 = re.fullmatch(
+        r"\d{1,3}(?:\.\d{1,3}){3}",
+        hostname
+    )
+
+    if "." not in hostname and not is_ipv4:
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website domain."
+        )
+
+    # --------------------------------------------------------
+    # Validate IPv4 values if applicable
+    # --------------------------------------------------------
+
+    if is_ipv4:
+
+        try:
+
+            octets = [
+                int(part)
+                for part in hostname.split(".")
+            ]
+
+            if any(
+                octet > 255
+                for octet in octets
+            ):
+
+                raise UnsupportedURL(
+                    "Unsupported URL. "
+                    "The IP address is invalid."
+                )
+
+        except ValueError:
+
+            raise UnsupportedURL(
+                "Unsupported URL. "
+                "The IP address is invalid."
+            )
+
+    # --------------------------------------------------------
+    # Reject obvious invalid hostname characters
+    # --------------------------------------------------------
+
+    if not re.fullmatch(
+        r"[a-zA-Z0-9.\-:%]+",
+        hostname
+    ):
+
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "The website address is invalid."
+        )
+
+    # --------------------------------------------------------
+    # Return validated URL
+    # --------------------------------------------------------
 
     return url
 
@@ -670,8 +863,6 @@ def scrape_with_requests(
                 allow_redirects=True
             )
 
-            # Helpful diagnostics
-
             print(
                 f"HTTP status: "
                 f"{response.status_code}"
@@ -697,10 +888,6 @@ def scrape_with_requests(
                 f"Content-Type: "
                 f"{content_type}"
             )
-
-            # ------------------------------------------------
-            # Content type validation
-            # ------------------------------------------------
 
             if (
                 "text/html"
@@ -786,10 +973,6 @@ def scrape_with_playwright(
         browser = None
 
         try:
-
-            # ------------------------------------------------
-            # Launch Chromium
-            # ------------------------------------------------
 
             browser = p.chromium.launch(
 
@@ -883,10 +1066,6 @@ def scrape_with_playwright(
             page.wait_for_timeout(
                 3000
             )
-
-            # Try waiting for network activity to settle.
-            # Some websites never become completely idle,
-            # so failure here should not stop scraping.
 
             try:
 
@@ -1016,10 +1195,6 @@ def scrape_with_jina(
                 "Jina Reader returned empty content."
             )
 
-        # ----------------------------------------------------
-        # Detect common Jina failure responses
-        # ----------------------------------------------------
-
         lower_text = text.lower()
 
         error_indicators = [
@@ -1059,10 +1234,6 @@ def scrape_with_jina(
                     "Jina Reader returned an error: "
                     f"{text[:500]}"
                 )
-
-        # ----------------------------------------------------
-        # Validate content length
-        # ----------------------------------------------------
 
         if len(text) < MIN_TEXT_LENGTH:
 
@@ -1114,7 +1285,6 @@ def scrape_single_page(
 
     jina_error = None
 
-
     # ========================================================
     # METHOD 1: REQUESTS
     # ========================================================
@@ -1147,7 +1317,6 @@ def scrape_single_page(
         print(
             requests_error
         )
-
 
     # ========================================================
     # METHOD 2: PLAYWRIGHT
@@ -1182,7 +1351,6 @@ def scrape_single_page(
             playwright_error
         )
 
-
     # ========================================================
     # METHOD 3: JINA READER
     # ========================================================
@@ -1215,7 +1383,6 @@ def scrape_single_page(
         print(
             jina_error
         )
-
 
     # ========================================================
     # ALL METHODS FAILED
@@ -1266,14 +1433,16 @@ def scrape_url(
 ) -> str:
 
     # ========================================================
-    # VALIDATE URL
+    # VALIDATE URL BEFORE ANY SCRAPING
     # ========================================================
 
     url = validate_url(
         url
     )
 
-    # Normalize initial URL
+    # ========================================================
+    # NORMALIZE INITIAL URL
+    # ========================================================
 
     normalized_start_url = normalize_url(
         url,
@@ -1282,8 +1451,9 @@ def scrape_url(
 
     if not normalized_start_url:
 
-        raise ValueError(
-            "Invalid website URL."
+        raise UnsupportedURL(
+            "Unsupported URL. "
+            "Please enter a valid website URL."
         )
 
     url = normalized_start_url
@@ -1301,7 +1471,6 @@ def scrape_url(
     collected_pages = []
 
     all_discovered_links = set()
-
 
     # ========================================================
     # CRAWL
@@ -1362,7 +1531,6 @@ def scrape_url(
             "=" * 70
         )
 
-
         # ====================================================
         # SCRAPE PAGE
         # ====================================================
@@ -1394,7 +1562,6 @@ def scrape_url(
                 f"using {method}"
             )
 
-
             # =================================================
             # DISCOVER LINKS
             # =================================================
@@ -1416,7 +1583,6 @@ def scrape_url(
                     link
                 )
 
-
         except Exception as e:
 
             print(
@@ -1427,7 +1593,6 @@ def scrape_url(
             print(
                 str(e)
             )
-
 
         # ====================================================
         # PRIORITIZE NEXT PAGES
@@ -1451,7 +1616,6 @@ def scrape_url(
             :MAX_PAGES
         ]
 
-
     # ========================================================
     # VERIFY RESULT
     # ========================================================
@@ -1468,7 +1632,6 @@ def scrape_url(
             "the detailed HTTP, Playwright and "
             "Jina Reader errors."
         )
-
 
     # ========================================================
     # COMBINE CONTENT
@@ -1501,7 +1664,6 @@ def scrape_url(
             f"{page_text}"
         )
 
-
     combined_text = (
 
         "\n\n---\n\n"
@@ -1511,7 +1673,6 @@ def scrape_url(
         )
 
     ).strip()
-
 
     # ========================================================
     # LIMIT TOTAL CONTENT
@@ -1533,7 +1694,6 @@ def scrape_url(
             f"{MAX_TOTAL_CHARACTERS} characters."
         )
 
-
     # ========================================================
     # FINAL VALIDATION
     # ========================================================
@@ -1544,7 +1704,6 @@ def scrape_url(
             "The website did not contain enough "
             "readable content."
         )
-
 
     # ========================================================
     # FINAL LOG
