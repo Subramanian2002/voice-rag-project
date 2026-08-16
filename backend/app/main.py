@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.scraper import scrape_url
+from app.scraper import scrape_url,UnsupportedURL
 from app.sources import uploaded_sources, url_sources
 from app.processor import process_all_sources, answer_question
 from app.speech import transcribe_audio

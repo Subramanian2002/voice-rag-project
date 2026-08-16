@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
 const BACKEND_URL = "https://voice-rag-backend-pm0s.onrender.com";
-  // "http://127.0.0.1:8000";
+// "http://127.0.0.1:8000";
+// 
+  // 
   
 
 function App() {
